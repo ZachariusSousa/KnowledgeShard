@@ -1,0 +1,64 @@
+{
+  "facts": [
+    {
+      "id": "train-derailment-friction",
+      "subject": "Train derailment risk",
+      "relation": "increases when",
+      "object": "lateral force exceeds wheel-rail friction",
+      "confidence": 0.9,
+      "source": "seed:railway-safety-primer",
+      "domain": "trains",
+      "tags": ["derailment", "friction", "safety"]
+    },
+    {
+      "id": "monsoon-rail-friction",
+      "subject": "Monsoon rain",
+      "relation": "can reduce",
+      "object": "wheel-rail adhesion by adding water, silt, or leaf contamination to the track",
+      "confidence": 0.86,
+      "source": "seed:track-conditions",
+      "domain": "trains",
+      "tags": ["weather", "adhesion", "safety"]
+    },
+    {
+      "id": "rail-drainage",
+      "subject": "Poor railway drainage",
+      "relation": "can cause",
+      "object": "ballast washout, track geometry defects, and higher derailment risk",
+      "confidence": 0.88,
+      "source": "seed:infrastructure-maintenance",
+      "domain": "trains",
+      "tags": ["infrastructure", "drainage", "safety"]
+    },
+    {
+      "id": "steam-locomotive-boiler",
+      "subject": "Steam locomotives",
+      "relation": "convert",
+      "object": "boiler steam pressure into piston or turbine motion",
+      "confidence": 0.92,
+      "source": "seed:locomotive-basics",
+      "domain": "trains",
+      "tags": ["steam", "locomotive", "mechanics"]
+    },
+    {
+      "id": "diesel-electric",
+      "subject": "Diesel-electric locomotives",
+      "relation": "use",
+      "object": "a diesel engine to generate electricity for traction motors",
+      "confidence": 0.94,
+      "source": "seed:locomotive-basics",
+      "domain": "trains",
+      "tags": ["diesel", "electric", "locomotive"]
+    },
+    {
+      "id": "positive-train-control",
+      "subject": "Positive train control",
+      "relation": "helps prevent",
+      "object": "train-to-train collisions, overspeed derailments, and movement through misaligned switches",
+      "confidence": 0.9,
+      "source": "seed:signaling-safety",
+      "domain": "trains",
+      "tags": ["signaling", "safety", "ptc"]
+    }
+  ]
+}

@@ -1,3 +1,6 @@
+# Project files
+Plan.md
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
@@ -43,6 +46,7 @@ htmlcov/
 .coverage
 .coverage.*
 .cache
+.deps/
 nosetests.xml
 coverage.xml
 *.cover
@@ -57,6 +61,8 @@ cover/
 
 # Django stuff:
 *.log
+data/*.db
+data/test/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
