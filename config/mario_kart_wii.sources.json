@@ -1,0 +1,14 @@
+{
+  "sources": [
+    {
+      "name": "Super Mario Wiki Mario Kart Wii recent changes",
+      "url": "https://www.mariowiki.com/index.php?title=Special:RecentChanges&feed=rss",
+      "tags": ["wiki", "curated"]
+    },
+    {
+      "name": "Mario Kart subreddit RSS",
+      "url": "https://www.reddit.com/r/MarioKart/.rss",
+      "tags": ["reddit", "community"]
+    }
+  ]
+}

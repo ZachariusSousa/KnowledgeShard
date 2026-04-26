@@ -12,6 +12,7 @@ except ImportError:  # pragma: no cover - exercised only when API deps are absen
     BaseModel = object
     Field = None
 
+from .graph import KnowledgeGraph
 from .savant import Savant
 from .storage import KnowledgeStore
 
@@ -66,3 +67,13 @@ if app:
     @app.get("/metrics")
     async def metrics() -> dict:
         return savant.metrics()
+
+
+    @app.get("/graph/entities/{entity}")
+    async def graph_entity(entity: str) -> dict:
+        return {"entity": entity, "neighbors": KnowledgeGraph(store, savant.domain).neighbors(entity)}
+
+
+    @app.get("/obsession/pending")
+    async def pending() -> dict:
+        return {"pending": [item.__dict__ for item in store.list_pending_facts(savant.domain)]}

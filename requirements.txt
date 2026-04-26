@@ -1,2 +1,9 @@
 fastapi>=0.110
 uvicorn[standard]>=0.27
+networkx>=3.2
+
+# Optional heavy ML extras for train-lora / KS_ENABLE_MODEL=1:
+# transformers>=4.44
+# peft>=0.12
+# datasets>=2.20
+# torch

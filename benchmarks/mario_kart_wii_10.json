@@ -1,0 +1,74 @@
+{
+  "questions": [
+    {
+      "question": "What is the advantage of manual drift in Mario Kart Wii?",
+      "required_key_points": ["manual drift", "mini-turbos"],
+      "forbidden_claims": ["automatic drift charges mini-turbos"],
+      "expected_citation_tags": ["drift"],
+      "threshold": 0.85
+    },
+    {
+      "question": "What does automatic drift trade away?",
+      "required_key_points": ["automatic drift", "removes mini-turbo"],
+      "forbidden_claims": ["manual drift is easier steering"],
+      "expected_citation_tags": ["drift"],
+      "threshold": 0.75
+    },
+    {
+      "question": "How do tricks help on ramps?",
+      "required_key_points": ["tricks", "landing boost"],
+      "forbidden_claims": ["tricks slow"],
+      "expected_citation_tags": ["tricks"],
+      "threshold": 0.85
+    },
+    {
+      "question": "Why are inside-drift bikes useful?",
+      "required_key_points": ["inside-drift bikes", "tight lines"],
+      "forbidden_claims": ["outside drift only"],
+      "expected_citation_tags": ["inside-drift"],
+      "threshold": 0.75
+    },
+    {
+      "question": "Why is Funky Kong on Flame Runner valued?",
+      "required_key_points": ["Funky Kong", "speed bonus", "Flame Runner"],
+      "forbidden_claims": ["lightweight"],
+      "expected_citation_tags": ["strategy"],
+      "threshold": 0.85
+    },
+    {
+      "question": "Why is Daisy on Mach Bike valued?",
+      "required_key_points": ["Daisy", "speed bonus", "Mach Bike"],
+      "forbidden_claims": ["heavyweight"],
+      "expected_citation_tags": ["strategy"],
+      "threshold": 0.85
+    },
+    {
+      "question": "What does Lightning do?",
+      "required_key_points": ["Lightning", "shrinks opponents", "drop items"],
+      "forbidden_claims": ["targets first place"],
+      "expected_citation_tags": ["lightning"],
+      "threshold": 0.85
+    },
+    {
+      "question": "What does the Spiny Shell target?",
+      "required_key_points": ["Spiny Shell", "first place"],
+      "forbidden_claims": ["last place"],
+      "expected_citation_tags": ["spiny shell"],
+      "threshold": 0.85
+    },
+    {
+      "question": "How are Mario Kart Wii cups organized?",
+      "required_key_points": ["four nitro cups", "four retro cups", "four tracks"],
+      "forbidden_claims": ["three tracks"],
+      "expected_citation_tags": ["cups"],
+      "threshold": 0.85
+    },
+    {
+      "question": "What is notable about Rainbow Road?",
+      "required_key_points": ["Rainbow Road", "Special Cup finale", "no guardrails"],
+      "forbidden_claims": ["Mushroom Cup"],
+      "expected_citation_tags": ["special cup"],
+      "threshold": 0.85
+    }
+  ]
+}

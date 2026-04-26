@@ -63,6 +63,8 @@ cover/
 *.log
 data/*.db
 data/test/
+weights/
+benchmarks/results/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal

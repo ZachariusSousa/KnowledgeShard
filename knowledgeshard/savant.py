@@ -7,20 +7,23 @@ from statistics import mean
 from uuid import uuid4
 
 from .models import Citation, Correction, Fact, QueryResponse
-from .retrieval import score
+from .model_runtime import OptionalModelRuntime
+from .retrieval import score_prepared, tokenize
 from .storage import KnowledgeStore
 
 
 class Savant:
     def __init__(
         self,
-        domain: str = "trains",
+        domain: str = "mario-kart-wii",
         store: KnowledgeStore | None = None,
         savant_id: str | None = None,
+        model_runtime: OptionalModelRuntime | None = None,
     ) -> None:
         self.domain = domain
         self.store = store or KnowledgeStore()
         self.savant_id = savant_id or f"local-{domain}-savant"
+        self.model_runtime = model_runtime or OptionalModelRuntime()
 
     def add_fact(
         self,
@@ -46,8 +49,9 @@ class Savant:
     def query(self, question: str, num_experts: int = 3, timeout_seconds: int = 30) -> QueryResponse:
         facts = self.store.list_facts(self.domain)
         corpus = [fact.text for fact in facts]
+        corpus_tokens = [set(tokenize(item)) for item in corpus]
         ranked = sorted(
-            ((score(question, fact.text, corpus), fact) for fact in facts),
+            ((score_prepared(question, fact.text, corpus_tokens), fact) for fact in facts),
             key=lambda item: (item[0], item[1].confidence),
             reverse=True,
         )
@@ -81,7 +85,8 @@ class Savant:
         )
         confidence = round(mean((fact.confidence * 0.7) + (match_score * 0.3) for match_score, fact in relevant), 3)
         fact_lines = " ".join(f"{fact.subject} {fact.relation} {fact.object}." for _, fact in relevant)
-        answer = (
+        model_answer = self._model_answer(question, citations)
+        answer = model_answer or (
             f"As the {self.domain} savant, my best answer is: {fact_lines} "
             f"Overall confidence: {confidence:.2f}."
         )
@@ -102,6 +107,20 @@ class Savant:
             [asdict(citation) for citation in citations],
         )
         return response
+
+    def _model_answer(self, question: str, citations: tuple[Citation, ...]) -> str | None:
+        if not self.model_runtime.config.enabled:
+            return None
+        evidence = "\n".join(f"- {citation.excerpt} (source: {citation.source})" for citation in citations)
+        prompt = (
+            "You are a local Mario Kart Wii savant. Answer only from the cited evidence. "
+            "If evidence is insufficient, say what is uncertain.\n\n"
+            f"Question: {question}\nEvidence:\n{evidence}\nAnswer:"
+        )
+        generated = self.model_runtime.generate(prompt)
+        if not generated:
+            return None
+        return f"{generated} Citations: " + "; ".join(citation.source for citation in citations)
 
     def correct(self, query_id: str, correction: str, confidence: float = 1.0) -> Correction:
         saved = Correction(
@@ -127,6 +146,9 @@ class Savant:
             "domain": self.domain,
             "status": "ready",
             "fact_count": self.store.count_facts(self.domain),
+            "pending_fact_count": self.store.count_pending_facts(self.domain),
+            "model_enabled": self.model_runtime.config.enabled,
+            "model_loaded": self.model_runtime._pipeline is not None,
         }
 
     def metrics(self) -> dict:
@@ -134,4 +156,7 @@ class Savant:
             "queries_answered": self.store.count_queries(),
             "corrections_received": self.store.count_corrections(),
             "facts_in_domain": self.store.count_facts(self.domain),
+            "pending_facts": self.store.count_pending_facts(self.domain),
+            "entities_in_domain": self.store.count_entities(self.domain),
+            "relations_in_domain": self.store.count_relations(self.domain),
         }

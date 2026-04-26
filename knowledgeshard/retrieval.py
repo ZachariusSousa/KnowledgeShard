@@ -64,12 +64,16 @@ def normalize(token: str) -> str:
 
 
 def score(query: str, document: str, corpus: Iterable[str]) -> float:
+    corpus_tokens = [set(tokenize(item)) for item in corpus]
+    return score_prepared(query, document, corpus_tokens)
+
+
+def score_prepared(query: str, document: str, corpus_tokens: list[set[str]]) -> float:
     query_terms = Counter(tokenize(query))
     document_terms = Counter(tokenize(document))
     if not query_terms or not document_terms:
         return 0.0
 
-    corpus_tokens = [set(tokenize(item)) for item in corpus]
     corpus_size = max(len(corpus_tokens), 1)
     weighted_overlap = 0.0
     norm = 0.0
