@@ -137,6 +137,66 @@ class Relation:
 
 
 @dataclass(frozen=True)
+class SourceCandidate:
+    url: str
+    title: str
+    domain: str
+    discovery_query: str
+    obsession: str = ""
+    source_type: str = "web"
+    trust_score: float = 0.5
+    relevance_score: float = 0.0
+    status: str = "candidate"
+    id: str = field(default_factory=lambda: uuid4().hex)
+    last_seen_at: str = field(default_factory=utc_now_iso)
+    last_fetched_at: str = ""
+
+    @classmethod
+    def from_row(cls, row: Any) -> "SourceCandidate":
+        return cls(
+            id=row["id"],
+            url=row["url"],
+            title=row["title"],
+            domain=row["domain"],
+            discovery_query=row["discovery_query"],
+            obsession=row["obsession"] if "obsession" in row.keys() else "",
+            source_type=row["source_type"],
+            trust_score=float(row["trust_score"]),
+            relevance_score=float(row["relevance_score"]),
+            status=row["status"],
+            last_seen_at=row["last_seen_at"],
+            last_fetched_at=row["last_fetched_at"] or "",
+        )
+
+
+@dataclass(frozen=True)
+class SourceDocument:
+    source_id: str
+    url: str
+    title: str
+    text_excerpt: str
+    content_hash: str
+    domain: str
+    obsession: str = ""
+    id: str = field(default_factory=lambda: uuid4().hex)
+    fetched_at: str = field(default_factory=utc_now_iso)
+
+    @classmethod
+    def from_row(cls, row: Any) -> "SourceDocument":
+        return cls(
+            id=row["id"],
+            source_id=row["source_id"],
+            url=row["url"],
+            title=row["title"],
+            text_excerpt=row["text_excerpt"],
+            content_hash=row["content_hash"],
+            domain=row["domain"],
+            obsession=row["obsession"] if "obsession" in row.keys() else "",
+            fetched_at=row["fetched_at"],
+        )
+
+
+@dataclass(frozen=True)
 class Citation:
     fact_id: str
     source: str

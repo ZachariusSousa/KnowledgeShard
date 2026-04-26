@@ -5,8 +5,8 @@ from uuid import uuid4
 from knowledgeshard.benchmark import score_answer
 from knowledgeshard.graph import KnowledgeGraph
 from knowledgeshard.model_runtime import ModelConfig, OptionalModelRuntime, load_dotenv
-from knowledgeshard.models import PendingFact
-from knowledgeshard.obsession import ObsessionLoop
+from knowledgeshard.models import PendingFact, SourceCandidate, SourceDocument
+from knowledgeshard.obsession import DocumentFetcher, FactExtractor, ObsessionLoop, SearchResult, parse_duckduckgo_results
 from knowledgeshard.savant import Savant
 from knowledgeshard.seed import load_seed_facts
 from knowledgeshard.storage import KnowledgeStore
@@ -174,6 +174,324 @@ class SavantTests(unittest.TestCase):
                 __import__("os").environ["KS_MODEL_BACKEND"] = old_backend
             else:
                 __import__("os").environ.pop("KS_MODEL_BACKEND", None)
+
+    def test_discovery_deduplicates_and_scores_sources(self):
+        class FakeSearch:
+            def search(self, query, limit=5):
+                return [
+                    SearchResult("Mario Kart Wii Manual Drift Guide", "https://example.test/mkwii-drift"),
+                    SearchResult("Mario Kart Wii Manual Drift Guide", "https://example.test/mkwii-drift"),
+                    SearchResult("Unrelated Cooking Notes", "https://example.test/cooking"),
+                ]
+
+        store = KnowledgeStore(self.db_path())
+        savant = Savant(domain="mario-kart-wii", store=store)
+        savant.add_fact("Manual drift", "enables", "mini-turbos", tags=("drift",))
+        loop = ObsessionLoop(store, "mario-kart-wii", search_provider=FakeSearch())
+
+        result = loop.discover(query_limit=1, results_per_query=3)
+        sources = loop.sources()
+
+        self.assertEqual(result["discovered"], 1)
+        self.assertEqual(len(sources), 1)
+        self.assertIn("mkwii-drift", sources[0]["url"])
+
+    def test_document_fetcher_extracts_readable_html(self):
+        fetcher = DocumentFetcher()
+        text = fetcher.readable_text(
+            "<html><head><style>.x{}</style></head><body><h1>Mario Kart Wii</h1>"
+            "<script>ignore()</script><p>Manual drift enables mini-turbos.</p></body></html>"
+        )
+
+        self.assertIn("Mario Kart Wii", text)
+        self.assertIn("Manual drift enables mini-turbos.", text)
+        self.assertNotIn("ignore", text)
+
+    def test_fact_extractor_validates_model_json(self):
+        class FakeRuntime(OptionalModelRuntime):
+            def __init__(self):
+                super().__init__(ModelConfig(enabled=True, backend="fake"))
+
+            @property
+            def available(self):
+                return True
+
+            def generate(self, prompt: str, max_new_tokens: int = 256) -> str | None:
+                return """
+                [
+                  {
+                    "subject": "Mario Kart Wii manual drift",
+                    "relation": "enables",
+                    "object": "mini-turbos after sustained drifting",
+                    "confidence": 0.82,
+                    "tags": ["drift", "mechanics"]
+                  }
+                ]
+                """
+
+        store = KnowledgeStore(self.db_path())
+        document = SourceDocument(
+            source_id="source-1",
+            url="https://example.test/mkwii-drift",
+            title="Mario Kart Wii Manual Drift",
+            text_excerpt="Mario Kart Wii manual drift enables mini-turbos after sustained drifting.",
+            content_hash="hash",
+            domain="mario-kart-wii",
+        )
+
+        facts, error = FactExtractor(store, "mario-kart-wii", FakeRuntime()).extract(document)
+
+        self.assertIsNone(error)
+        self.assertEqual(len(facts), 1)
+        self.assertEqual(facts[0].source, document.url)
+        self.assertIn("mechanics", facts[0].tags)
+
+    def test_run_once_discovers_fetches_and_stages_pending_facts(self):
+        class FakeSearch:
+            def search(self, query, limit=5):
+                return [SearchResult("Mario Kart Wii Lightning Guide", "https://example.test/lightning")]
+
+        class FakeFetcher:
+            def fetch(self, source, max_chars=12000):
+                return SourceDocument(
+                    source_id=source.id,
+                    url=source.url,
+                    title=source.title,
+                    text_excerpt="Mario Kart Wii Lightning shrinks opponents and can create shock dodges.",
+                    content_hash="lightning-hash",
+                    domain=source.domain,
+                )
+
+        class FakeExtractor:
+            def extract(self, document, limit=5):
+                return [
+                    PendingFact(
+                        id="extracted-lightning",
+                        subject="Mario Kart Wii Lightning",
+                        relation="shrinks",
+                        object="opponents and can create shock dodge opportunities",
+                        source=document.url,
+                        domain=document.domain,
+                        tags=("obsession", "extracted", "lightning"),
+                    )
+                ], None
+
+        store = KnowledgeStore(self.db_path())
+        loop = ObsessionLoop(
+            store,
+            "mario-kart-wii",
+            search_provider=FakeSearch(),
+            fetcher=FakeFetcher(),
+            extractor=FakeExtractor(),
+        )
+
+        result = loop.run_once(budget=1)
+
+        self.assertEqual(result["pending_added"], 1)
+        self.assertEqual(store.count_pending_facts("mario-kart-wii"), 1)
+
+    def test_parse_duckduckgo_results_decodes_redirects(self):
+        page = (
+            '<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.test%2Fmkwii">'
+            "Mario Kart Wii Guide</a>"
+        )
+
+        results = parse_duckduckgo_results(page)
+
+        self.assertEqual(results[0].url, "https://example.test/mkwii")
+
+    def test_discovery_fallback_creates_sources_when_search_returns_empty(self):
+        class EmptySearch:
+            def search(self, query, limit=5):
+                return []
+
+        store = KnowledgeStore(self.db_path())
+        loop = ObsessionLoop(store, "mario-kart-wii", obsession="Mario Kart Wii", search_provider=EmptySearch())
+
+        result = loop.discover(query_limit=1, results_per_query=2)
+
+        self.assertGreater(result["discovered"], 0)
+        self.assertTrue(loop.sources())
+
+    def test_auto_approve_high_confidence_and_stage_low_confidence(self):
+        class FakeExtractor:
+            def extract(self, document, limit=5):
+                return [
+                    PendingFact(
+                        id="auto-fact",
+                        subject="Mario Kart Wii Auto Fact",
+                        relation="states",
+                        object="high confidence learning enters the graph",
+                        confidence=0.92,
+                        source=document.url,
+                        domain=document.domain,
+                        tags=("obsession", "extracted"),
+                    ),
+                    PendingFact(
+                        id="pending-fact",
+                        subject="Mario Kart Wii Pending Fact",
+                        relation="states",
+                        object="low confidence learning waits for review",
+                        confidence=0.55,
+                        source=document.url,
+                        domain=document.domain,
+                        tags=("obsession", "extracted"),
+                    ),
+                ], None
+
+        store = KnowledgeStore(self.db_path())
+        document = SourceDocument(
+            source_id="source-1",
+            url="https://example.test/mkwii-learning",
+            title="Mario Kart Wii Learning",
+            text_excerpt=(
+                "Mario Kart Wii Auto Fact states high confidence learning enters the graph. "
+                "Mario Kart Wii Pending Fact states low confidence learning waits for review."
+            ),
+            content_hash="learn-hash",
+            domain="mario-kart-wii",
+            obsession="Mario Kart Wii",
+        )
+        store.add_source_document(document)
+        loop = ObsessionLoop(store, "mario-kart-wii", obsession="Mario Kart Wii", extractor=FakeExtractor())
+
+        result = loop.extract(auto_approve=True, auto_confidence_threshold=0.8)
+
+        self.assertEqual(result["auto_approved"], 1)
+        self.assertEqual(result["pending_added"], 1)
+        self.assertEqual(store.count_facts("mario-kart-wii"), 1)
+        self.assertEqual(store.count_pending_facts("mario-kart-wii"), 1)
+        self.assertIn("auto-approved", store.list_facts("mario-kart-wii")[0].tags)
+
+    def test_run_logs_and_learned_logs_are_visible(self):
+        class FakeSearch:
+            def search(self, query, limit=5):
+                return [SearchResult("Mario Kart Wii Source", "https://example.test/source")]
+
+        class FakeFetcher:
+            def fetch(self, source, max_chars=12000):
+                return SourceDocument(
+                    source_id=source.id,
+                    url=source.url,
+                    title=source.title,
+                    text_excerpt="Mario Kart Wii Learned Fact states run logs should show learned facts.",
+                    content_hash="source-hash",
+                    domain=source.domain,
+                    obsession=source.obsession,
+                )
+
+        class FakeExtractor:
+            def extract(self, document, limit=5):
+                return [
+                    PendingFact(
+                        id="learned-fact",
+                        subject="Mario Kart Wii Learned Fact",
+                        relation="states",
+                        object="run logs should show learned facts",
+                        confidence=0.91,
+                        source=document.url,
+                        domain=document.domain,
+                        tags=("obsession", "extracted"),
+                    )
+                ], None
+
+        store = KnowledgeStore(self.db_path())
+        loop = ObsessionLoop(
+            store,
+            "mario-kart-wii",
+            obsession="Mario Kart Wii",
+            search_provider=FakeSearch(),
+            fetcher=FakeFetcher(),
+            extractor=FakeExtractor(),
+        )
+
+        result = loop.run_once(budget=1, auto_approve=True)
+
+        self.assertEqual(result["auto_approved"], 1)
+        self.assertTrue(loop.learned())
+        self.assertTrue(loop.documents())
+        self.assertTrue(loop.runs())
+
+    def test_daemon_can_run_one_cycle(self):
+        class EmptySearch:
+            def search(self, query, limit=5):
+                return []
+
+        store = KnowledgeStore(self.db_path())
+        loop = ObsessionLoop(store, "mario-kart-wii", obsession="Mario Kart Wii", search_provider=EmptySearch())
+
+        results = loop.run_daemon(budget=1, interval_minutes=0.01, max_cycles=1)
+
+        self.assertEqual(len(results), 1)
+        self.assertIn("discovered", results[0])
+
+    def test_auto_approve_discards_search_page_and_placeholder_facts(self):
+        class FakeExtractor:
+            def extract(self, document, limit=5):
+                return [
+                    PendingFact(
+                        id="bad-search",
+                        subject="DuckDuckGo",
+                        relation="search_engine",
+                        object="none",
+                        confidence=1.0,
+                        source=document.url,
+                        domain=document.domain,
+                        tags=("obsession", "extracted"),
+                    ),
+                    PendingFact(
+                        id="good-grounded",
+                        subject="Mario Kart Wii Lightning",
+                        relation="shrinks",
+                        object="opponents",
+                        confidence=0.93,
+                        source=document.url,
+                        domain=document.domain,
+                        tags=("obsession", "extracted"),
+                    ),
+                ], None
+
+        store = KnowledgeStore(self.db_path())
+        document = SourceDocument(
+            source_id="source-1",
+            url="https://example.test/lightning",
+            title="Mario Kart Wii Lightning",
+            text_excerpt="Mario Kart Wii Lightning shrinks opponents during races.",
+            content_hash="quality-hash",
+            domain="mario-kart-wii",
+            obsession="Mario Kart Wii",
+        )
+        store.add_source_document(document)
+        loop = ObsessionLoop(store, "mario-kart-wii", obsession="Mario Kart Wii", extractor=FakeExtractor())
+
+        result = loop.extract(auto_approve=True)
+
+        self.assertEqual(result["auto_approved"], 1)
+        self.assertEqual(store.count_facts("mario-kart-wii"), 1)
+        self.assertIn("discarded DuckDuckGo", " ".join(result["errors"]))
+
+    def test_fetch_skips_search_result_sources(self):
+        class FakeFetcher:
+            def fetch(self, source, max_chars=12000):
+                raise AssertionError("search result source should not be fetched")
+
+        store = KnowledgeStore(self.db_path())
+        store.upsert_source_candidate(
+            SourceCandidate(
+                id="search-source",
+                url="https://duckduckgo.com/html/?q=Mario+Kart+Wii",
+                title="Mario Kart Wii search",
+                domain="mario-kart-wii",
+                obsession="Mario Kart Wii",
+                discovery_query="Mario Kart Wii",
+                relevance_score=1.0,
+            )
+        )
+        loop = ObsessionLoop(store, "mario-kart-wii", obsession="Mario Kart Wii", fetcher=FakeFetcher())
+
+        result = loop.fetch_documents(limit=10)
+
+        self.assertIn("skipped search result page", " ".join(result["errors"]))
 
 
 if __name__ == "__main__":
