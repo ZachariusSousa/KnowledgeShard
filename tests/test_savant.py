@@ -4,6 +4,7 @@ from uuid import uuid4
 
 from knowledgeshard.benchmark import score_answer
 from knowledgeshard.graph import KnowledgeGraph
+from knowledgeshard.model_runtime import ModelConfig, OptionalModelRuntime, load_dotenv
 from knowledgeshard.models import PendingFact
 from knowledgeshard.obsession import ObsessionLoop
 from knowledgeshard.savant import Savant
@@ -12,9 +13,19 @@ from knowledgeshard.storage import KnowledgeStore
 
 
 class SavantTests(unittest.TestCase):
+    def setUp(self):
+        Path("data/test").mkdir(parents=True, exist_ok=True)
+        self._db_paths: list[Path] = []
+
+    def tearDown(self):
+        for path in self._db_paths:
+            path.unlink(missing_ok=True)
+            path.with_suffix(path.suffix + "-journal").unlink(missing_ok=True)
+
     def db_path(self) -> Path:
         path = Path("data/test") / f"{uuid4().hex}.db"
         path.parent.mkdir(parents=True, exist_ok=True)
+        self._db_paths.append(path)
         return path
 
     def test_seed_and_query_returns_citations(self):
@@ -117,6 +128,52 @@ class SavantTests(unittest.TestCase):
 
         self.assertTrue(good["passed"])
         self.assertFalse(bad["passed"])
+
+    def test_enabled_model_runtime_writes_final_answer_from_model(self):
+        class FakeRuntime(OptionalModelRuntime):
+            def __init__(self):
+                super().__init__(ModelConfig(enabled=True, backend="fake"))
+                self.backend_loaded = True
+
+            @property
+            def available(self):
+                return True
+
+            def generate(self, prompt: str, max_new_tokens: int = 256) -> str | None:
+                self.last_prompt = prompt
+                return "Manual drift is useful because it can charge mini-turbos from the cited evidence."
+
+        store = KnowledgeStore(self.db_path())
+        load_seed_facts("data/seeds/mario_kart_wii.json", store, "mario-kart-wii")
+        runtime = FakeRuntime()
+        savant = Savant(domain="mario-kart-wii", store=store, model_runtime=runtime)
+
+        response = savant.query("What is the advantage of manual drift in Mario Kart Wii?")
+
+        self.assertIn("Manual drift is useful", response.answer)
+        self.assertIn("Citations:", response.answer)
+        self.assertIn("Evidence:", runtime.last_prompt)
+
+    def test_dotenv_loader_sets_missing_model_environment(self):
+        env_path = Path("data/test") / f"{uuid4().hex}.env"
+        env_path.write_text("KS_ENABLE_MODEL=1\nKS_MODEL_BACKEND=ollama\n", encoding="utf-8")
+        self._db_paths.append(env_path)
+        old_enable = __import__("os").environ.pop("KS_ENABLE_MODEL", None)
+        old_backend = __import__("os").environ.pop("KS_MODEL_BACKEND", None)
+        try:
+            load_dotenv(env_path)
+            config = ModelConfig.from_env()
+            self.assertTrue(config.enabled)
+            self.assertEqual(config.backend, "ollama")
+        finally:
+            if old_enable is not None:
+                __import__("os").environ["KS_ENABLE_MODEL"] = old_enable
+            else:
+                __import__("os").environ.pop("KS_ENABLE_MODEL", None)
+            if old_backend is not None:
+                __import__("os").environ["KS_MODEL_BACKEND"] = old_backend
+            else:
+                __import__("os").environ.pop("KS_MODEL_BACKEND", None)
 
 
 if __name__ == "__main__":

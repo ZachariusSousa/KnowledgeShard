@@ -117,10 +117,10 @@ class Savant:
             "If evidence is insufficient, say what is uncertain.\n\n"
             f"Question: {question}\nEvidence:\n{evidence}\nAnswer:"
         )
-        generated = self.model_runtime.generate(prompt)
+        generated = self.model_runtime.generate(prompt, max_new_tokens=220)
         if not generated:
             return None
-        return f"{generated} Citations: " + "; ".join(citation.source for citation in citations)
+        return f"{generated}\n\nCitations: " + "; ".join(citation.source for citation in citations)
 
     def correct(self, query_id: str, correction: str, confidence: float = 1.0) -> Correction:
         saved = Correction(
@@ -148,8 +148,13 @@ class Savant:
             "fact_count": self.store.count_facts(self.domain),
             "pending_fact_count": self.store.count_pending_facts(self.domain),
             "model_enabled": self.model_runtime.config.enabled,
-            "model_loaded": self.model_runtime._pipeline is not None,
+            "model_backend": self.model_runtime.config.backend,
+            "model_loaded": self.model_runtime.backend_loaded or self.model_runtime._pipeline is not None,
+            "model_error": self.model_runtime.error,
         }
+
+    def model_status(self) -> dict:
+        return self.model_runtime.status()
 
     def metrics(self) -> dict:
         return {

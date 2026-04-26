@@ -22,6 +22,9 @@ class SavantRequestHandler(BaseHTTPRequestHandler):
         if self.path == "/status":
             self.write_json(self.savant.status())
             return
+        if self.path == "/model-status":
+            self.write_json(self.savant.model_status())
+            return
         if self.path == "/metrics":
             self.write_json(self.savant.metrics())
             return

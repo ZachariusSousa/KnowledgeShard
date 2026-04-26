@@ -43,6 +43,7 @@ def build_parser() -> argparse.ArgumentParser:
     correct.add_argument("--confidence", type=float, default=1.0)
 
     subparsers.add_parser("status", help="Show savant status.")
+    subparsers.add_parser("model-status", help="Show local model runtime status.")
     subparsers.add_parser("metrics", help="Show MVP metrics.")
 
     graph = subparsers.add_parser("graph", help="Inspect the approved knowledge graph.")
@@ -102,6 +103,9 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "status":
         print(asdict_like(savant.status()))
+        return 0
+    if args.command == "model-status":
+        print(asdict_like(savant.model_status()))
         return 0
     if args.command == "metrics":
         print(asdict_like(savant.metrics()))

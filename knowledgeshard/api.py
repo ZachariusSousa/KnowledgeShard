@@ -64,6 +64,11 @@ if app:
         return savant.status()
 
 
+    @app.get("/model-status")
+    async def model_status() -> dict:
+        return savant.model_status()
+
+
     @app.get("/metrics")
     async def metrics() -> dict:
         return savant.metrics()
