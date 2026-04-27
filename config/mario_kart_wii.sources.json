@@ -1,4 +1,99 @@
 {
+  "research_profile": {
+    "domain": "mario-kart-wii",
+    "seed_urls": [
+      "https://www.mariowiki.com/Mario_Kart_Wii",
+      "https://www.mariowiki.com/Flame_Runner",
+      "https://www.mariowiki.com/Mach_Bike",
+      "https://www.mariowiki.com/Bullet_Bike",
+      "https://www.mariowiki.com/Flame_Flyer",
+      "https://www.mariowiki.com/Bike",
+      "https://wiki.tockdom.com/wiki/Mario_Kart_Wii"
+    ],
+    "allowed_hosts": [
+      "mariowiki.com",
+      "wiki.tockdom.com",
+      "mkwrs.com",
+      "mariokartboards.com",
+      "mariokartwii.fandom.com",
+      "mario.fandom.com",
+      "nintendo.com",
+      "wikipedia.org"
+    ],
+    "denied_url_patterns": [
+      "index\\.php\\?search=",
+      "special:",
+      "/file:",
+      "/gallery:",
+      "/category:",
+      "/template:",
+      "/talk:",
+      "/user:",
+      "/search",
+      "action=edit",
+      "/genre",
+      "/nintendo_selects",
+      "nintendo_entertainment_analysis_and_development",
+      "entertainment_analysis"
+    ],
+    "source_trust": {
+      "mariowiki.com": 0.86,
+      "wiki.tockdom.com": 0.82,
+      "mkwrs.com": 0.78,
+      "mariokartboards.com": 0.62,
+      "mariokartwii.fandom.com": 0.7,
+      "mario.fandom.com": 0.64,
+      "nintendo.com": 0.9,
+      "wikipedia.org": 0.58
+    },
+    "required_terms": [
+      "mario",
+      "kart",
+      "wii"
+    ],
+    "agenda_templates": [
+      "{obsession} vehicle stats",
+      "{obsession} character weight classes",
+      "{obsession} drift mini turbo mechanics",
+      "{obsession} tracks shortcuts",
+      "{obsession} competitive viability"
+    ],
+    "allowed_relations": [
+      "is_a",
+      "has_property",
+      "has_part",
+      "enables",
+      "requires",
+      "uses",
+      "related_to",
+      "has_stat",
+      "has_vehicle_class",
+      "has_weight_class",
+      "has_shortcut",
+      "is_viable_for"
+    ],
+    "relation_aliases": {
+      "has_speed": "has_stat",
+      "has_weight": "has_stat",
+      "has_drift": "has_stat",
+      "has_acceleration": "has_stat",
+      "has_mini_turbo": "has_stat",
+      "vehicle_class": "has_vehicle_class",
+      "weight_class": "has_weight_class"
+    },
+    "table_header_aliases": {
+      "vehicle": "name",
+      "kart": "name",
+      "bike": "name",
+      "character": "name",
+      "speed": "stat",
+      "weight": "stat",
+      "drift": "stat",
+      "mini_turbo": "stat",
+      "acceleration": "stat"
+    },
+    "default_crawl_depth": 1
+  },
   "sources": [
     {
       "name": "Super Mario Wiki Mario Kart Wii recent changes",

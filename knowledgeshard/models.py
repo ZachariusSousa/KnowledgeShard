@@ -21,6 +21,9 @@ class Fact:
     source: str = "local"
     domain: str = "general"
     tags: tuple[str, ...] = field(default_factory=tuple)
+    evidence_text: str = ""
+    evidence_hash: str = ""
+    extraction_method: str = ""
     id: str = field(default_factory=lambda: uuid4().hex)
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
@@ -41,6 +44,9 @@ class Fact:
             source=row["source"],
             domain=row["domain"],
             tags=tags,
+            evidence_text=row["evidence_text"] if "evidence_text" in row.keys() else "",
+            evidence_hash=row["evidence_hash"] if "evidence_hash" in row.keys() else "",
+            extraction_method=row["extraction_method"] if "extraction_method" in row.keys() else "",
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -55,6 +61,9 @@ class PendingFact:
     source: str = "obsession"
     domain: str = "general"
     tags: tuple[str, ...] = field(default_factory=tuple)
+    evidence_text: str = ""
+    evidence_hash: str = ""
+    extraction_method: str = ""
     review_status: str = "pending"
     id: str = field(default_factory=lambda: uuid4().hex)
     created_at: str = field(default_factory=utc_now_iso)
@@ -76,6 +85,9 @@ class PendingFact:
             source=row["source"],
             domain=row["domain"],
             tags=tags,
+            evidence_text=row["evidence_text"] if "evidence_text" in row.keys() else "",
+            evidence_hash=row["evidence_hash"] if "evidence_hash" in row.keys() else "",
+            extraction_method=row["extraction_method"] if "extraction_method" in row.keys() else "",
             review_status=row["review_status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -147,6 +159,9 @@ class SourceCandidate:
     trust_score: float = 0.5
     relevance_score: float = 0.0
     status: str = "candidate"
+    parent_url: str = ""
+    crawl_depth: int = 0
+    discovery_reason: str = ""
     id: str = field(default_factory=lambda: uuid4().hex)
     last_seen_at: str = field(default_factory=utc_now_iso)
     last_fetched_at: str = ""
@@ -164,6 +179,9 @@ class SourceCandidate:
             trust_score=float(row["trust_score"]),
             relevance_score=float(row["relevance_score"]),
             status=row["status"],
+            parent_url=row["parent_url"] if "parent_url" in row.keys() else "",
+            crawl_depth=int(row["crawl_depth"]) if "crawl_depth" in row.keys() else 0,
+            discovery_reason=row["discovery_reason"] if "discovery_reason" in row.keys() else "",
             last_seen_at=row["last_seen_at"],
             last_fetched_at=row["last_fetched_at"] or "",
         )
@@ -178,11 +196,13 @@ class SourceDocument:
     content_hash: str
     domain: str
     obsession: str = ""
+    full_text: str = ""
     id: str = field(default_factory=lambda: uuid4().hex)
     fetched_at: str = field(default_factory=utc_now_iso)
 
     @classmethod
     def from_row(cls, row: Any) -> "SourceDocument":
+        full_text = row["full_text"] if "full_text" in row.keys() else ""
         return cls(
             id=row["id"],
             source_id=row["source_id"],
@@ -192,8 +212,178 @@ class SourceDocument:
             content_hash=row["content_hash"],
             domain=row["domain"],
             obsession=row["obsession"] if "obsession" in row.keys() else "",
+            full_text=full_text or row["text_excerpt"],
             fetched_at=row["fetched_at"],
         )
+
+
+@dataclass(frozen=True)
+class ResearchFinding:
+    topic: str
+    angle: str
+    summary: str
+    evidence_text: str
+    source: str
+    domain: str = "general"
+    novelty_score: float = 0.5
+    confidence: float = 0.6
+    tags: tuple[str, ...] = field(default_factory=tuple)
+    id: str = field(default_factory=lambda: uuid4().hex)
+    created_at: str = field(default_factory=utc_now_iso)
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ResearchFinding":
+        tags = tuple(filter(None, (row["tags"] or "").split(",")))
+        return cls(
+            id=row["id"],
+            topic=row["topic"],
+            angle=row["angle"],
+            summary=row["summary"],
+            evidence_text=row["evidence_text"],
+            source=row["source"],
+            domain=row["domain"],
+            novelty_score=float(row["novelty_score"]),
+            confidence=float(row["confidence"]),
+            tags=tags,
+            created_at=row["created_at"],
+        )
+
+
+@dataclass(frozen=True)
+class ResearchReport:
+    topic: str
+    domain: str
+    summary: str
+    findings: tuple[str, ...] = field(default_factory=tuple)
+    sources: tuple[str, ...] = field(default_factory=tuple)
+    next_questions: tuple[str, ...] = field(default_factory=tuple)
+    status: str = "ok"
+    errors: tuple[str, ...] = field(default_factory=tuple)
+    id: str = field(default_factory=lambda: uuid4().hex)
+    created_at: str = field(default_factory=utc_now_iso)
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ResearchReport":
+        return cls(
+            id=row["id"],
+            topic=row["topic"],
+            domain=row["domain"],
+            summary=row["summary"],
+            findings=tuple(json_loads(row["findings"])),
+            sources=tuple(json_loads(row["sources"])),
+            next_questions=tuple(json_loads(row["next_questions"])),
+            status=row["status"],
+            errors=tuple(json_loads(row["errors"])),
+            created_at=row["created_at"],
+        )
+
+
+@dataclass(frozen=True)
+class ResearchChunk:
+    document_id: str
+    chunk_index: int
+    text: str
+    char_count: int
+    token_count: int
+    topic: str
+    domain: str
+    status: str = "pending"
+    priority: float = 0.5
+    attempts: int = 0
+    error: str = ""
+    processed_at: str = ""
+    id: str = field(default_factory=lambda: uuid4().hex)
+    created_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ResearchChunk":
+        return cls(
+            id=row["id"],
+            document_id=row["document_id"],
+            chunk_index=int(row["chunk_index"]),
+            text=row["text"],
+            char_count=int(row["char_count"]),
+            token_count=int(row["token_count"]),
+            topic=row["topic"],
+            domain=row["domain"],
+            status=row["status"],
+            priority=float(row["priority"]),
+            attempts=int(row["attempts"]),
+            error=row["error"],
+            processed_at=row["processed_at"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+        )
+
+
+@dataclass(frozen=True)
+class ResearchNote:
+    chunk_id: str
+    document_id: str
+    topic: str
+    domain: str
+    summary: str
+    claims: tuple[str, ...] = field(default_factory=tuple)
+    entities: tuple[str, ...] = field(default_factory=tuple)
+    relations: tuple[str, ...] = field(default_factory=tuple)
+    questions: tuple[str, ...] = field(default_factory=tuple)
+    evidence_quotes: tuple[str, ...] = field(default_factory=tuple)
+    confidence: float = 0.5
+    source: str = ""
+    id: str = field(default_factory=lambda: uuid4().hex)
+    created_at: str = field(default_factory=utc_now_iso)
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ResearchNote":
+        return cls(
+            id=row["id"],
+            chunk_id=row["chunk_id"],
+            document_id=row["document_id"],
+            topic=row["topic"],
+            domain=row["domain"],
+            summary=row["summary"],
+            claims=tuple(json_loads(row["claims"])),
+            entities=tuple(json_loads(row["entities"])),
+            relations=tuple(json_loads(row["relations"])),
+            questions=tuple(json_loads(row["questions"])),
+            evidence_quotes=tuple(json_loads(row["evidence_quotes"])),
+            confidence=float(row["confidence"]),
+            source=row["source"],
+            created_at=row["created_at"],
+        )
+
+
+@dataclass(frozen=True)
+class ResearchSynthesisRun:
+    topic: str
+    domain: str
+    summary: str
+    promoted_pending_ids: tuple[str, ...] = field(default_factory=tuple)
+    unresolved_questions: tuple[str, ...] = field(default_factory=tuple)
+    errors: tuple[str, ...] = field(default_factory=tuple)
+    id: str = field(default_factory=lambda: uuid4().hex)
+    created_at: str = field(default_factory=utc_now_iso)
+
+    @classmethod
+    def from_row(cls, row: Any) -> "ResearchSynthesisRun":
+        return cls(
+            id=row["id"],
+            topic=row["topic"],
+            domain=row["domain"],
+            summary=row["summary"],
+            promoted_pending_ids=tuple(json_loads(row["promoted_pending_ids"])),
+            unresolved_questions=tuple(json_loads(row["unresolved_questions"])),
+            errors=tuple(json_loads(row["errors"])),
+            created_at=row["created_at"],
+        )
+
+
+def json_loads(value: str) -> list[str]:
+    import json
+
+    payload = json.loads(value or "[]")
+    return [str(item) for item in payload]
 
 
 @dataclass(frozen=True)

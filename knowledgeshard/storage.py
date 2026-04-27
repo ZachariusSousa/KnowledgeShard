@@ -6,8 +6,23 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
 
-from .models import Correction, Entity, Fact, PendingFact, Relation, SourceCandidate, SourceDocument, utc_now_iso
+from .models import (
+    Correction,
+    Entity,
+    Fact,
+    PendingFact,
+    Relation,
+    ResearchChunk,
+    ResearchFinding,
+    ResearchNote,
+    ResearchReport,
+    ResearchSynthesisRun,
+    SourceCandidate,
+    SourceDocument,
+    utc_now_iso,
+)
 
 
 class ClosingConnection(sqlite3.Connection):
@@ -41,6 +56,9 @@ class KnowledgeStore:
                     source TEXT NOT NULL,
                     domain TEXT NOT NULL,
                     tags TEXT NOT NULL DEFAULT '',
+                    evidence_text TEXT NOT NULL DEFAULT '',
+                    evidence_hash TEXT NOT NULL DEFAULT '',
+                    extraction_method TEXT NOT NULL DEFAULT '',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -98,6 +116,9 @@ class KnowledgeStore:
                     source TEXT NOT NULL,
                     domain TEXT NOT NULL,
                     tags TEXT NOT NULL DEFAULT '',
+                    evidence_text TEXT NOT NULL DEFAULT '',
+                    evidence_hash TEXT NOT NULL DEFAULT '',
+                    extraction_method TEXT NOT NULL DEFAULT '',
                     review_status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -120,6 +141,9 @@ class KnowledgeStore:
                     trust_score REAL NOT NULL,
                     relevance_score REAL NOT NULL,
                     status TEXT NOT NULL,
+                    parent_url TEXT NOT NULL DEFAULT '',
+                    crawl_depth INTEGER NOT NULL DEFAULT 0,
+                    discovery_reason TEXT NOT NULL DEFAULT '',
                     last_seen_at TEXT NOT NULL,
                     last_fetched_at TEXT NOT NULL DEFAULT '',
                     UNIQUE(url, domain)
@@ -131,6 +155,7 @@ class KnowledgeStore:
                     url TEXT NOT NULL,
                     title TEXT NOT NULL,
                     text_excerpt TEXT NOT NULL,
+                    full_text TEXT NOT NULL DEFAULT '',
                     content_hash TEXT NOT NULL,
                     domain TEXT NOT NULL,
                     obsession TEXT NOT NULL DEFAULT '',
@@ -168,11 +193,103 @@ class KnowledgeStore:
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_discovery_queries_domain ON discovery_queries(domain, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS research_findings (
+                    id TEXT PRIMARY KEY,
+                    topic TEXT NOT NULL,
+                    angle TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    evidence_text TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    novelty_score REAL NOT NULL,
+                    confidence REAL NOT NULL,
+                    tags TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS research_reports (
+                    id TEXT PRIMARY KEY,
+                    topic TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    findings TEXT NOT NULL,
+                    sources TEXT NOT NULL,
+                    next_questions TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    errors TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_research_findings_domain ON research_findings(domain, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_research_reports_domain ON research_reports(domain, created_at DESC);
+
+                CREATE TABLE IF NOT EXISTS research_chunks (
+                    id TEXT PRIMARY KEY,
+                    document_id TEXT NOT NULL,
+                    chunk_index INTEGER NOT NULL,
+                    text TEXT NOT NULL,
+                    char_count INTEGER NOT NULL,
+                    token_count INTEGER NOT NULL,
+                    topic TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    priority REAL NOT NULL,
+                    attempts INTEGER NOT NULL,
+                    error TEXT NOT NULL DEFAULT '',
+                    processed_at TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    UNIQUE(document_id, chunk_index, topic)
+                );
+
+                CREATE TABLE IF NOT EXISTS research_notes (
+                    id TEXT PRIMARY KEY,
+                    chunk_id TEXT NOT NULL,
+                    document_id TEXT NOT NULL,
+                    topic TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    claims TEXT NOT NULL,
+                    entities TEXT NOT NULL,
+                    relations TEXT NOT NULL,
+                    questions TEXT NOT NULL,
+                    evidence_quotes TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    source TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    UNIQUE(chunk_id)
+                );
+
+                CREATE TABLE IF NOT EXISTS research_synthesis_runs (
+                    id TEXT PRIMARY KEY,
+                    topic TEXT NOT NULL,
+                    domain TEXT NOT NULL,
+                    summary TEXT NOT NULL,
+                    promoted_pending_ids TEXT NOT NULL,
+                    unresolved_questions TEXT NOT NULL,
+                    errors TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_research_chunks_status ON research_chunks(domain, topic, status, priority DESC);
+                CREATE INDEX IF NOT EXISTS idx_research_notes_domain ON research_notes(domain, topic, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_research_synthesis_domain ON research_synthesis_runs(domain, topic, created_at DESC);
                 """
             )
             self._ensure_column(db, "source_candidates", "obsession", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "source_candidates", "parent_url", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "source_candidates", "crawl_depth", "INTEGER NOT NULL DEFAULT 0")
+            self._ensure_column(db, "source_candidates", "discovery_reason", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "source_documents", "obsession", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "source_documents", "full_text", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "obsession_runs", "obsession", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "facts", "evidence_text", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "facts", "evidence_hash", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "facts", "extraction_method", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "pending_facts", "evidence_text", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "pending_facts", "evidence_hash", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "pending_facts", "extraction_method", "TEXT NOT NULL DEFAULT ''")
 
     def _ensure_column(self, db: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -193,9 +310,9 @@ class KnowledgeStore:
             """
             INSERT INTO facts (
                 id, subject, relation, object, confidence, source, domain,
-                tags, created_at, updated_at
+                tags, evidence_text, evidence_hash, extraction_method, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 subject = excluded.subject,
                 relation = excluded.relation,
@@ -204,6 +321,9 @@ class KnowledgeStore:
                 source = excluded.source,
                 domain = excluded.domain,
                 tags = excluded.tags,
+                evidence_text = excluded.evidence_text,
+                evidence_hash = excluded.evidence_hash,
+                extraction_method = excluded.extraction_method,
                 updated_at = excluded.updated_at
             """,
             (
@@ -215,6 +335,9 @@ class KnowledgeStore:
                 fact.source,
                 fact.domain,
                 ",".join(fact.tags),
+                fact.evidence_text,
+                fact.evidence_hash,
+                fact.extraction_method,
                 fact.created_at,
                 utc_now_iso(),
             ),
@@ -239,7 +362,7 @@ class KnowledgeStore:
                     updated_at = excluded.updated_at
                 """,
                 (
-                    f"{fact.domain}:{name}".lower(),
+                    f"{fact.domain}:{name}",
                     name,
                     fact.domain,
                     "concept",
@@ -307,6 +430,25 @@ class KnowledgeStore:
                 row = db.execute("SELECT COUNT(*) AS total FROM facts").fetchone()
         return int(row["total"])
 
+    def list_domains(self) -> list[str]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT domain, MAX(last_seen) AS last_seen FROM (
+                    SELECT domain, MAX(updated_at) AS last_seen FROM facts GROUP BY domain
+                    UNION ALL
+                    SELECT domain, MAX(created_at) AS last_seen FROM pending_facts GROUP BY domain
+                    UNION ALL
+                    SELECT domain, MAX(last_seen_at) AS last_seen FROM source_candidates GROUP BY domain
+                    UNION ALL
+                    SELECT domain, MAX(created_at) AS last_seen FROM obsession_runs GROUP BY domain
+                )
+                GROUP BY domain
+                ORDER BY last_seen DESC
+                """
+            ).fetchall()
+        return [str(row["domain"]) for row in rows if row["domain"]]
+
     def add_pending_fact(self, pending: PendingFact) -> bool:
         if self._fact_exists(pending.subject, pending.relation, pending.object, pending.domain):
             return False
@@ -324,9 +466,9 @@ class KnowledgeStore:
                 """
                 INSERT INTO pending_facts (
                     id, subject, relation, object, confidence, source, domain,
-                    tags, review_status, created_at, updated_at
+                    tags, evidence_text, evidence_hash, extraction_method, review_status, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pending.id,
@@ -337,6 +479,9 @@ class KnowledgeStore:
                     pending.source,
                     pending.domain,
                     ",".join(pending.tags),
+                    pending.evidence_text,
+                    pending.evidence_hash,
+                    pending.extraction_method,
                     pending.review_status,
                     pending.created_at,
                     pending.updated_at,
@@ -404,6 +549,9 @@ class KnowledgeStore:
             source=pending.source,
             domain=pending.domain,
             tags=pending.tags,
+            evidence_text=pending.evidence_text,
+            evidence_hash=pending.evidence_hash,
+            extraction_method=pending.extraction_method,
             created_at=pending.created_at,
         )
         self.upsert_fact(fact)
@@ -469,15 +617,19 @@ class KnowledgeStore:
                 """
                 INSERT INTO source_candidates (
                     id, url, title, domain, obsession, discovery_query, source_type,
-                    trust_score, relevance_score, status, last_seen_at, last_fetched_at
+                    trust_score, relevance_score, status, parent_url, crawl_depth,
+                    discovery_reason, last_seen_at, last_fetched_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(url, domain) DO UPDATE SET
                     title = excluded.title,
                     obsession = excluded.obsession,
                     discovery_query = excluded.discovery_query,
                     source_type = excluded.source_type,
                     relevance_score = MAX(source_candidates.relevance_score, excluded.relevance_score),
+                    parent_url = CASE WHEN source_candidates.parent_url = '' THEN excluded.parent_url ELSE source_candidates.parent_url END,
+                    crawl_depth = MIN(source_candidates.crawl_depth, excluded.crawl_depth),
+                    discovery_reason = excluded.discovery_reason,
                     last_seen_at = excluded.last_seen_at
                 """,
                 (
@@ -491,6 +643,9 @@ class KnowledgeStore:
                     source.trust_score,
                     source.relevance_score,
                     source.status,
+                    source.parent_url,
+                    source.crawl_depth,
+                    source.discovery_reason,
                     source.last_seen_at,
                     source.last_fetched_at,
                 ),
@@ -559,9 +714,9 @@ class KnowledgeStore:
             db.execute(
                 """
                 INSERT INTO source_documents (
-                    id, source_id, url, title, text_excerpt, content_hash, domain, obsession, fetched_at
+                    id, source_id, url, title, text_excerpt, full_text, content_hash, domain, obsession, fetched_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document.id,
@@ -569,6 +724,7 @@ class KnowledgeStore:
                     document.url,
                     document.title,
                     document.text_excerpt,
+                    document.full_text or document.text_excerpt,
                     document.content_hash,
                     document.domain,
                     document.obsession,
@@ -650,7 +806,7 @@ class KnowledgeStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    f"discovery:{domain}:{abs(hash((obsession, query, utc_now_iso())))}",
+                    f"discovery:{domain}:{uuid4().hex}",
                     domain,
                     obsession,
                     query,
@@ -694,7 +850,7 @@ class KnowledgeStore:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
-                    f"obsession:{domain}:{utc_now_iso()}",
+                    f"obsession:{domain}:{uuid4().hex}",
                     domain,
                     status,
                     discovered_count,
@@ -745,3 +901,294 @@ class KnowledgeStore:
         with self.connect() as db:
             row = db.execute("SELECT COUNT(*) AS total FROM corrections").fetchone()
         return int(row["total"])
+
+    def add_research_finding(self, finding: ResearchFinding) -> bool:
+        with self.connect() as db:
+            existing = db.execute(
+                """
+                SELECT id FROM research_findings
+                WHERE topic = ? AND angle = ? AND summary = ? AND source = ? AND domain = ?
+                """,
+                (finding.topic, finding.angle, finding.summary, finding.source, finding.domain),
+            ).fetchone()
+            if existing:
+                return False
+            db.execute(
+                """
+                INSERT INTO research_findings (
+                    id, topic, angle, summary, evidence_text, source, domain,
+                    novelty_score, confidence, tags, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    finding.id,
+                    finding.topic,
+                    finding.angle,
+                    finding.summary,
+                    finding.evidence_text,
+                    finding.source,
+                    finding.domain,
+                    finding.novelty_score,
+                    finding.confidence,
+                    ",".join(finding.tags),
+                    finding.created_at,
+                ),
+            )
+        return True
+
+    def list_research_findings(self, domain: str | None = None, limit: int = 20) -> list[ResearchFinding]:
+        with self.connect() as db:
+            if domain:
+                rows = db.execute(
+                    """
+                    SELECT * FROM research_findings
+                    WHERE domain = ?
+                    ORDER BY novelty_score DESC, created_at DESC
+                    LIMIT ?
+                    """,
+                    (domain, limit),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    """
+                    SELECT * FROM research_findings
+                    ORDER BY novelty_score DESC, created_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        return [ResearchFinding.from_row(row) for row in rows]
+
+    def add_research_report(self, report: ResearchReport) -> None:
+        with self.connect() as db:
+            db.execute(
+                """
+                INSERT INTO research_reports (
+                    id, topic, domain, summary, findings, sources,
+                    next_questions, status, errors, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report.id,
+                    report.topic,
+                    report.domain,
+                    report.summary,
+                    json.dumps(list(report.findings)),
+                    json.dumps(list(report.sources)),
+                    json.dumps(list(report.next_questions)),
+                    report.status,
+                    json.dumps(list(report.errors)),
+                    report.created_at,
+                ),
+            )
+
+    def list_research_reports(self, domain: str | None = None, limit: int = 10) -> list[ResearchReport]:
+        with self.connect() as db:
+            if domain:
+                rows = db.execute(
+                    """
+                    SELECT * FROM research_reports
+                    WHERE domain = ?
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (domain, limit),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    """
+                    SELECT * FROM research_reports
+                    ORDER BY created_at DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        return [ResearchReport.from_row(row) for row in rows]
+
+    def add_research_chunk(self, chunk: ResearchChunk) -> bool:
+        with self.connect() as db:
+            existing = db.execute(
+                """
+                SELECT id FROM research_chunks
+                WHERE document_id = ? AND chunk_index = ? AND topic = ?
+                """,
+                (chunk.document_id, chunk.chunk_index, chunk.topic),
+            ).fetchone()
+            if existing:
+                return False
+            db.execute(
+                """
+                INSERT INTO research_chunks (
+                    id, document_id, chunk_index, text, char_count, token_count,
+                    topic, domain, status, priority, attempts, error,
+                    processed_at, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    chunk.id,
+                    chunk.document_id,
+                    chunk.chunk_index,
+                    chunk.text,
+                    chunk.char_count,
+                    chunk.token_count,
+                    chunk.topic,
+                    chunk.domain,
+                    chunk.status,
+                    chunk.priority,
+                    chunk.attempts,
+                    chunk.error,
+                    chunk.processed_at,
+                    chunk.created_at,
+                    chunk.updated_at,
+                ),
+            )
+        return True
+
+    def list_research_chunks(
+        self,
+        domain: str,
+        topic: str,
+        status: str | None = None,
+        limit: int = 20,
+    ) -> list[ResearchChunk]:
+        with self.connect() as db:
+            if status:
+                rows = db.execute(
+                    """
+                    SELECT * FROM research_chunks
+                    WHERE domain = ? AND topic = ? AND status = ?
+                    ORDER BY priority DESC, created_at ASC
+                    LIMIT ?
+                    """,
+                    (domain, topic, status, limit),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    """
+                    SELECT * FROM research_chunks
+                    WHERE domain = ? AND topic = ?
+                    ORDER BY created_at ASC
+                    LIMIT ?
+                    """,
+                    (domain, topic, limit),
+                ).fetchall()
+        return [ResearchChunk.from_row(row) for row in rows]
+
+    def get_research_chunk(self, chunk_id: str) -> ResearchChunk | None:
+        with self.connect() as db:
+            row = db.execute("SELECT * FROM research_chunks WHERE id = ?", (chunk_id,)).fetchone()
+        return ResearchChunk.from_row(row) if row else None
+
+    def update_research_chunk_status(
+        self,
+        chunk_id: str,
+        status: str,
+        *,
+        error: str = "",
+        increment_attempts: bool = False,
+        processed: bool = False,
+    ) -> None:
+        chunk = self.get_research_chunk(chunk_id)
+        if chunk is None:
+            raise KeyError(f"Research chunk {chunk_id} was not found.")
+        attempts = chunk.attempts + 1 if increment_attempts else chunk.attempts
+        with self.connect() as db:
+            db.execute(
+                """
+                UPDATE research_chunks
+                SET status = ?, attempts = ?, error = ?, processed_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    attempts,
+                    error,
+                    utc_now_iso() if processed else chunk.processed_at,
+                    utc_now_iso(),
+                    chunk_id,
+                ),
+            )
+
+    def add_research_note(self, note: ResearchNote) -> bool:
+        with self.connect() as db:
+            existing = db.execute("SELECT id FROM research_notes WHERE chunk_id = ?", (note.chunk_id,)).fetchone()
+            if existing:
+                return False
+            db.execute(
+                """
+                INSERT INTO research_notes (
+                    id, chunk_id, document_id, topic, domain, summary, claims,
+                    entities, relations, questions, evidence_quotes, confidence,
+                    source, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    note.id,
+                    note.chunk_id,
+                    note.document_id,
+                    note.topic,
+                    note.domain,
+                    note.summary,
+                    json.dumps(list(note.claims)),
+                    json.dumps(list(note.entities)),
+                    json.dumps(list(note.relations)),
+                    json.dumps(list(note.questions)),
+                    json.dumps(list(note.evidence_quotes)),
+                    note.confidence,
+                    note.source,
+                    note.created_at,
+                ),
+            )
+        return True
+
+    def list_research_notes(self, domain: str, topic: str, limit: int = 20) -> list[ResearchNote]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM research_notes
+                WHERE domain = ? AND topic = ?
+                ORDER BY confidence DESC, created_at DESC
+                LIMIT ?
+                """,
+                (domain, topic, limit),
+            ).fetchall()
+        return [ResearchNote.from_row(row) for row in rows]
+
+    def add_research_synthesis_run(self, run: ResearchSynthesisRun) -> None:
+        with self.connect() as db:
+            db.execute(
+                """
+                INSERT INTO research_synthesis_runs (
+                    id, topic, domain, summary, promoted_pending_ids,
+                    unresolved_questions, errors, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    run.id,
+                    run.topic,
+                    run.domain,
+                    run.summary,
+                    json.dumps(list(run.promoted_pending_ids)),
+                    json.dumps(list(run.unresolved_questions)),
+                    json.dumps(list(run.errors)),
+                    run.created_at,
+                ),
+            )
+
+    def list_research_synthesis_runs(self, domain: str, topic: str, limit: int = 10) -> list[ResearchSynthesisRun]:
+        with self.connect() as db:
+            rows = db.execute(
+                """
+                SELECT * FROM research_synthesis_runs
+                WHERE domain = ? AND topic = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                (domain, topic, limit),
+            ).fetchall()
+        return [ResearchSynthesisRun.from_row(row) for row in rows]
