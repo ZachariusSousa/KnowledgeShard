@@ -376,10 +376,11 @@ class KnowledgeStore:
                 ).fetchone()
         return int(row["total"])
 
-    def approve_pending_fact(self, pending_id: str) -> Fact:
+    def approve_pending_fact(self, pending_id: str, extra_tags: Iterable[str] = ()) -> Fact:
         pending = self.get_pending_fact(pending_id)
         if pending is None:
             raise KeyError(f"Pending fact {pending_id} was not found.")
+        tags = tuple(dict.fromkeys((*pending.tags, *tuple(extra_tags))))
         fact = Fact(
             id=pending.id,
             subject=pending.subject,
@@ -388,7 +389,7 @@ class KnowledgeStore:
             confidence=pending.confidence,
             source=pending.source,
             domain=pending.domain,
-            tags=pending.tags,
+            tags=tags,
             evidence_text=pending.evidence_text,
             evidence_hash=pending.evidence_hash,
             extraction_method=pending.extraction_method,

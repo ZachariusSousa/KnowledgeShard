@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import re
 import json
-from dataclasses import asdict
-from uuid import NAMESPACE_URL, uuid5
+import threading
+import time
+from dataclasses import asdict, dataclass, field
+from typing import Callable
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from .extraction import evidence_hash, parse_confidence
 from .model_runtime import OptionalModelRuntime
-from .models import PendingFact, ResearchChunk, ResearchNote, ResearchSynthesisRun, SourceCandidate
+from .models import PendingFact, ResearchChunk, ResearchNote, ResearchSynthesisRun, SourceCandidate, utc_now_iso
 from .sources import (
     DocumentFetcher,
     DuckDuckGoSearchProvider,
@@ -21,6 +24,9 @@ from .sources import (
 )
 from .retrieval import tokenize
 from .storage import KnowledgeStore
+
+
+AUTO_APPROVE_CONFIDENCE = 0.82
 
 
 class ResearchAgent:
@@ -127,6 +133,7 @@ class ResearchAgent:
         processed = 0
         failed = 0
         notes_added = 0
+        repaired = 0
         errors: list[str] = []
         for chunk in pending[:chunks]:
             prompt = research_note_prompt(self.domain, self.topic, chunk.text)
@@ -140,11 +147,36 @@ class ResearchAgent:
             try:
                 note = parse_research_note(generated, chunk)
             except ValueError as exc:
-                error = str(exc)
-                self.store.update_research_chunk_status(chunk.id, "failed", error=error, increment_attempts=True)
-                errors.append(f"{chunk.id}: {error}")
-                failed += 1
-                continue
+                repaired_text = repair_json_text(generated)
+                if repaired_text:
+                    try:
+                        note = parse_research_note(repaired_text, chunk)
+                    except ValueError:
+                        repaired_text = ""
+                    else:
+                        repaired += 1
+                        if self.store.add_research_note(note):
+                            notes_added += 1
+                        self.store.update_research_chunk_status(chunk.id, "processed", processed=True)
+                        processed += 1
+                        continue
+                repaired_text = self.repair_research_note(generated, str(exc))
+                if not repaired_text:
+                    error = str(exc)
+                    self.store.update_research_chunk_status(chunk.id, "failed", error=error, increment_attempts=True)
+                    errors.append(f"{chunk.id}: {error}")
+                    failed += 1
+                    continue
+                repaired_text = repair_json_text(repaired_text) or repaired_text
+                try:
+                    note = parse_research_note(repaired_text, chunk)
+                except ValueError as repair_exc:
+                    error = f"{exc}; repair failed: {repair_exc}"
+                    self.store.update_research_chunk_status(chunk.id, "failed", error=error, increment_attempts=True)
+                    errors.append(f"{chunk.id}: {error}")
+                    failed += 1
+                    continue
+                repaired += 1
             if self.store.add_research_note(note):
                 notes_added += 1
             self.store.update_research_chunk_status(chunk.id, "processed", processed=True)
@@ -155,8 +187,13 @@ class ResearchAgent:
             "processed": processed,
             "failed": failed,
             "notes_added": notes_added,
+            "repaired": repaired,
             "errors": errors,
         }
+
+    def repair_research_note(self, generated: str, error: str) -> str | None:
+        prompt = repair_research_note_prompt(self.domain, self.topic, generated, error)
+        return self.model_runtime.generate(prompt, max_new_tokens=700)
 
     def notes(self, limit: int = 20) -> list[dict]:
         return [asdict(note) for note in self.store.list_research_notes(self.domain, self.topic, limit)]
@@ -216,6 +253,24 @@ class ResearchAgent:
             "errors": errors,
         }
 
+    def auto_approve(self, threshold: float = AUTO_APPROVE_CONFIDENCE, limit: int = 50) -> dict:
+        approved: list[str] = []
+        skipped: list[str] = []
+        for pending in self.store.list_pending_facts(self.domain, "pending")[:limit]:
+            if is_auto_approvable(pending, self.topic, threshold):
+                fact = self.store.approve_pending_fact(pending.id, extra_tags=("auto-approved",))
+                approved.append(fact.id)
+            else:
+                skipped.append(pending.id)
+        return {
+            "domain": self.domain,
+            "topic": self.topic,
+            "threshold": threshold,
+            "approved": len(approved),
+            "approved_ids": approved,
+            "skipped": len(skipped),
+        }
+
     def angles(self, limit: int = 8) -> list[str]:
         profile_angles = generate_agenda(self.domain, self.topic, self.profile, self.store, limit)
         defaults = [
@@ -256,6 +311,192 @@ class ResearchAgent:
                 candidates.append(candidate)
         candidates.sort(key=lambda item: (item.trust_score + item.relevance_score), reverse=True)
         return candidates[:5]
+
+
+@dataclass
+class ResearchJob:
+    id: str
+    topic: str
+    domain: str
+    config_path: str
+    status: str = "queued"
+    phase: str = "queued"
+    cycles_completed: int = 0
+    max_cycles: int = 1
+    started_at: str = field(default_factory=utc_now_iso)
+    updated_at: str = field(default_factory=utc_now_iso)
+    finished_at: str = ""
+    stop_requested: bool = False
+    counters: dict[str, int] = field(default_factory=dict)
+    errors: list[str] = field(default_factory=list)
+
+    def snapshot(self) -> dict:
+        return {
+            "id": self.id,
+            "topic": self.topic,
+            "domain": self.domain,
+            "config_path": self.config_path,
+            "status": self.status,
+            "phase": self.phase,
+            "cycles_completed": self.cycles_completed,
+            "max_cycles": self.max_cycles,
+            "started_at": self.started_at,
+            "updated_at": self.updated_at,
+            "finished_at": self.finished_at,
+            "stop_requested": self.stop_requested,
+            "counters": dict(self.counters),
+            "errors": list(self.errors[-10:]),
+        }
+
+
+class ResearchJobManager:
+    def __init__(
+        self,
+        store: KnowledgeStore,
+        *,
+        agent_factory: Callable[..., ResearchAgent] = ResearchAgent,
+        sleep_seconds: float = 0.0,
+    ) -> None:
+        self.store = store
+        self.agent_factory = agent_factory
+        self.sleep_seconds = sleep_seconds
+        self.jobs: dict[str, ResearchJob] = {}
+        self._threads: dict[str, threading.Thread] = {}
+        self._lock = threading.Lock()
+
+    def start(
+        self,
+        topic: str,
+        domain: str,
+        config_path: str = "config/mario_kart_wii.sources.json",
+        *,
+        max_cycles: int = 1,
+        ingest_budget: int = 4,
+        chunk_limit: int = 20,
+        process_chunks: int = 5,
+        synthesize_limit: int = 20,
+        auto_approve_threshold: float = AUTO_APPROVE_CONFIDENCE,
+    ) -> ResearchJob:
+        topic = " ".join(topic.split())
+        if not topic:
+            raise ValueError("topic is required")
+        job = ResearchJob(
+            id=uuid4().hex,
+            topic=topic,
+            domain=domain,
+            config_path=config_path,
+            max_cycles=max(1, max_cycles),
+        )
+        with self._lock:
+            self.jobs[job.id] = job
+        thread = threading.Thread(
+            target=self._run,
+            args=(job, ingest_budget, chunk_limit, process_chunks, synthesize_limit, auto_approve_threshold),
+            daemon=True,
+        )
+        with self._lock:
+            self._threads[job.id] = thread
+        thread.start()
+        return job
+
+    def stop(self, job_id: str) -> bool:
+        with self._lock:
+            job = self.jobs.get(job_id)
+            if job is None:
+                return False
+            job.stop_requested = True
+            job.updated_at = utc_now_iso()
+            return True
+
+    def get(self, job_id: str) -> dict | None:
+        with self._lock:
+            job = self.jobs.get(job_id)
+            return job.snapshot() if job else None
+
+    def list(self) -> list[dict]:
+        with self._lock:
+            return [job.snapshot() for job in sorted(self.jobs.values(), key=lambda item: item.started_at, reverse=True)]
+
+    def _run(
+        self,
+        job: ResearchJob,
+        ingest_budget: int,
+        chunk_limit: int,
+        process_chunks: int,
+        synthesize_limit: int,
+        auto_approve_threshold: float,
+    ) -> None:
+        agent = self.agent_factory(self.store, job.domain, job.topic, config_path=job.config_path)
+        self._mark(job, "running", "starting")
+        try:
+            for _ in range(job.max_cycles):
+                if job.stop_requested:
+                    self._mark(job, "stopped", "stopped")
+                    break
+                self._step(job, "ingest", agent.ingest, ingest_budget)
+                self._step(job, "chunk", agent.chunk, chunk_limit)
+                self._step(job, "process", agent.process, process_chunks)
+                self._step(job, "synthesize", agent.synthesize, synthesize_limit)
+                self._step(job, "auto_approve", agent.auto_approve, auto_approve_threshold)
+                with self._lock:
+                    job.cycles_completed += 1
+                    job.updated_at = utc_now_iso()
+                if self.sleep_seconds:
+                    time.sleep(self.sleep_seconds)
+            if job.status != "stopped":
+                self._mark(job, "completed", "completed", finished=True)
+        except Exception as exc:
+            self._record_error(job, str(exc))
+            self._mark(job, "failed", "failed", finished=True)
+
+    def _step(self, job: ResearchJob, phase: str, fn: Callable, *args: object) -> None:
+        if job.stop_requested:
+            self._mark(job, "stopped", "stopped")
+            return
+        self._mark(job, "running", phase)
+        result = fn(*args)
+        self._merge_result(job, result)
+
+    def _mark(self, job: ResearchJob, status: str, phase: str, *, finished: bool = False) -> None:
+        with self._lock:
+            job.status = status
+            job.phase = phase
+            job.updated_at = utc_now_iso()
+            if finished:
+                job.finished_at = job.updated_at
+
+    def _merge_result(self, job: ResearchJob, result: dict) -> None:
+        with self._lock:
+            for key, value in result.items():
+                if isinstance(value, int):
+                    job.counters[key] = job.counters.get(key, 0) + value
+            error = result.get("error")
+            if error:
+                job.errors.append(str(error))
+            errors = result.get("errors")
+            if isinstance(errors, list):
+                job.errors.extend(str(item) for item in errors)
+            job.updated_at = utc_now_iso()
+
+    def _record_error(self, job: ResearchJob, error: str) -> None:
+        with self._lock:
+            job.errors.append(error)
+            job.updated_at = utc_now_iso()
+
+
+def is_auto_approvable(pending: PendingFact, topic: str, threshold: float = AUTO_APPROVE_CONFIDENCE) -> bool:
+    if pending.confidence < threshold:
+        return False
+    if pending.extraction_method != "research-note":
+        return False
+    if not pending.evidence_text.strip() or not pending.evidence_hash.strip():
+        return False
+    tags = set(pending.tags)
+    if "research" not in tags or "synthesized" not in tags:
+        return False
+    if topic and pending.subject != topic[:200]:
+        return False
+    return True
 
 def split_sentences(text: str) -> list[str]:
     normalized = " ".join(text.split())
@@ -305,6 +546,19 @@ def research_note_prompt(domain: str, topic: str, text: str) -> str:
     )
 
 
+def repair_research_note_prompt(domain: str, topic: str, generated: str, error: str) -> str:
+    return (
+        "Repair this malformed research-note JSON.\n"
+        f"Domain: {domain}\n"
+        f"Topic: {topic}\n"
+        f"Parser error: {error}\n"
+        "Return only one valid JSON object with these fields: summary, claims, entities, relations, questions, evidence_quotes, confidence.\n"
+        "claims, entities, relations, questions, and evidence_quotes must be arrays of strings.\n"
+        "Do not add new facts. Preserve only information already present in the malformed JSON.\n\n"
+        f"Malformed JSON:\n{generated[:7000]}\n"
+    )
+
+
 def parse_research_note(text: str, chunk: ResearchChunk) -> ResearchNote:
     payload = parse_json_object(text)
     summary = str(payload.get("summary", "")).strip()
@@ -340,6 +594,55 @@ def parse_json_object(text: str) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("model response JSON was not an object")
     return payload
+
+
+def repair_json_text(text: str) -> str:
+    start = text.find("{")
+    end = text.rfind("}")
+    if start == -1 or end == -1 or end < start:
+        return ""
+    repaired = text[start : end + 1].strip()
+    if repaired.startswith("```"):
+        repaired = re.sub(r"^```(?:json)?\s*", "", repaired, flags=re.IGNORECASE)
+        repaired = re.sub(r"\s*```$", "", repaired)
+    repaired = re.sub(r'(?<=")\s+(?=")', ", ", repaired)
+    repaired = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", repaired)
+    repaired = escape_inner_json_quotes(repaired)
+    repaired = re.sub(r",(\s*[}\]])", r"\1", repaired)
+    return repaired
+
+
+def escape_inner_json_quotes(text: str) -> str:
+    output: list[str] = []
+    in_string = False
+    escaped = False
+    for index, char in enumerate(text):
+        if char == "\\" and in_string and not escaped:
+            output.append(char)
+            escaped = True
+            continue
+        if char == '"' and not escaped:
+            if not in_string:
+                in_string = True
+                output.append(char)
+                continue
+            next_char = next_nonspace(text, index + 1)
+            if next_char in {",", "}", "]", ":"} or next_char == "":
+                in_string = False
+                output.append(char)
+            else:
+                output.append('\\"')
+            continue
+        output.append(char)
+        escaped = False
+    return "".join(output)
+
+
+def next_nonspace(text: str, start: int) -> str:
+    for char in text[start:]:
+        if not char.isspace():
+            return char
+    return ""
 
 
 def json_string_list(value: object, max_chars: int) -> list[str]:
