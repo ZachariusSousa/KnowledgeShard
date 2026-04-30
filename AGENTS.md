@@ -14,18 +14,20 @@ Core modules:
 - `knowledgeshard/storage.py`: SQLite persistence and schema initialization.
 - `knowledgeshard/retrieval.py`: stdlib TF-IDF-style lexical scoring.
 - `knowledgeshard/savant.py`: main runtime orchestration for add/query/correct/status/metrics.
+- `knowledgeshard/ingest.py`: Crawl4AI document fetching and normalization.
+- `knowledgeshard/sources.py`: source profile loading, source scoring, search parsing, and crawl fetcher adapter.
+- `knowledgeshard/extraction.py`: local model and structured-table extraction helpers.
+- `knowledgeshard/research.py`: crawl, chunk, local-LLM note extraction, and synthesis flow.
 - `knowledgeshard/seed.py`: JSON seed loader.
 - `knowledgeshard/cli.py`: command-line interface.
 - `knowledgeshard/server.py`: zero-dependency HTTP server.
-- `knowledgeshard/api.py`: optional FastAPI app.
-- `data/seeds/trains.json`: checked-in seed facts.
 - `tests/test_savant.py`: unittest coverage for seed/query/correction flows.
 
 ## Product Direction From Plan.md
 
 - Specialization matters more than broad generality. Prefer domain-specific facts, citations, confidence, and correction flows over generic chatbot behavior.
 - Local-first is a core constraint. Personal queries and model/runtime state should stay local by default.
-- Future phases include richer knowledge graph entities/relations, gossip sync, CRDT-style conflict handling, query routing, response aggregation, reputation, and feedback propagation.
+- Future phases include richer graph-like entities/relations, gossip sync, CRDT-style conflict handling, query routing, response aggregation, reputation, and feedback propagation.
 - Sources and confidence are not optional decoration. Answers should remain grounded in stored facts and citations, and uncertain knowledge should stay visibly uncertain.
 - User corrections are part of the learning loop. Treat them as durable knowledge with provenance, not as transient UI feedback.
 
@@ -56,19 +58,13 @@ python -m knowledgeshard.cli seed
 Ask a question through the CLI:
 
 ```powershell
-python -m knowledgeshard.cli ask "Why do trains derail in monsoons?"
+python -m knowledgeshard.cli ask "What is the advantage of manual drift in Mario Kart Wii?"
 ```
 
 Run the stdlib HTTP server:
 
 ```powershell
 python -m knowledgeshard.server --host 127.0.0.1 --port 8080
-```
-
-Run the FastAPI app, if optional dependencies are installed:
-
-```powershell
-python -m uvicorn knowledgeshard.api:app --host 127.0.0.1 --port 8080
 ```
 
 ## Coding Guidelines
@@ -82,7 +78,7 @@ python -m uvicorn knowledgeshard.api:app --host 127.0.0.1 --port 8080
 - Clamp user-provided confidence values to the `[0.0, 1.0]` range, matching existing behavior.
 - Use `Path` for filesystem paths and keep default data paths under `data/`.
 - Store generated runtime databases under ignored paths such as `data/*.db` or `data/test/`.
-- When adding fields or tables, favor shapes that can evolve toward `Plan.md` concepts: entities, relations, source refs, version metadata, and conflict state.
+- When adding fields or tables, favor shapes that can evolve toward `Plan.md` concepts: source refs, version metadata, conflict state, and future entity/relation projection.
 - Avoid broad refactors unless they are needed for the requested behavior.
 
 ## Testing Notes
@@ -103,14 +99,13 @@ python -m unittest
 - Preserve provenance when ingesting or correcting data. Prefer explicit `source` values and tags over anonymous facts.
 - Plan.md's long-term graph model includes entities, relations, source references, timestamps, confidence, version vectors, and disputed/conflict states. Use that direction when designing migrations, but keep the current MVP schema simple unless the task requires expansion.
 - Do not commit generated SQLite databases, server logs, virtual environments, caches, or test databases.
-- Be careful when editing `data/seeds/trains.json`; retrieval tests and examples may depend on the train-domain vocabulary.
+- Be careful when editing `data/seeds/mario_kart_wii.json`; retrieval tests and examples may depend on that vocabulary.
 
 ## API Notes
 
-- `knowledgeshard/server.py` is the no-extra-dependencies HTTP API and should keep working without FastAPI installed.
-- `knowledgeshard/api.py` is optional and should continue to import safely when FastAPI/Pydantic are missing.
+- `knowledgeshard/server.py` is the no-extra-dependencies HTTP API and should keep working with only the core requirements installed.
 - Keep response payloads dataclass-friendly so they can be serialized with `dataclasses.asdict`.
-- Keep public API changes aligned with the planned local API shape: `/query`, `/correct`, `/status`, and `/metrics`.
+- Keep public API changes aligned with the local API shape: `/query`, `/correct`, `/status`, `/metrics`, and `/pending`.
 - If future networked routing is added, provide a local-only path for sensitive queries before sending anything to peers.
 
 ## Security And Privacy

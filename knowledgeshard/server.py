@@ -7,9 +7,7 @@ import json
 from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote
 
-from .graph import KnowledgeGraph
 from .savant import Savant
 from .storage import KnowledgeStore
 
@@ -28,12 +26,8 @@ class SavantRequestHandler(BaseHTTPRequestHandler):
         if self.path == "/metrics":
             self.write_json(self.savant.metrics())
             return
-        if self.path == "/obsession/pending":
+        if self.path == "/pending":
             self.write_json({"pending": [pending.__dict__ for pending in self.store.list_pending_facts(self.savant.domain)]})
-            return
-        if self.path.startswith("/graph/entities/"):
-            entity = unquote(self.path.removeprefix("/graph/entities/"))
-            self.write_json({"entity": entity, "neighbors": KnowledgeGraph(self.store, self.savant.domain).neighbors(entity)})
             return
         self.write_json({"error": "not found"}, HTTPStatus.NOT_FOUND)
 

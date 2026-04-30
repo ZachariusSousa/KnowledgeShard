@@ -64,7 +64,7 @@ class Savant:
                 question=question,
                 answer=(
                     f"I do not have enough {self.domain} knowledge to answer that yet. "
-                    "Add a fact or run an obsession ingest, then ask again."
+                    "Add a fact or run research ingest, then ask again."
                 ),
                 confidence=0.0,
                 citations=(),
@@ -162,6 +162,4 @@ class Savant:
             "corrections_received": self.store.count_corrections(),
             "facts_in_domain": self.store.count_facts(self.domain),
             "pending_facts": self.store.count_pending_facts(self.domain),
-            "entities_in_domain": self.store.count_entities(self.domain),
-            "relations_in_domain": self.store.count_relations(self.domain),
         }

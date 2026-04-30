@@ -95,60 +95,6 @@ class PendingFact:
 
 
 @dataclass(frozen=True)
-class Entity:
-    name: str
-    domain: str
-    entity_type: str = "concept"
-    confidence: float = 0.75
-    source: str = "local"
-    id: str = field(default_factory=lambda: uuid4().hex)
-    created_at: str = field(default_factory=utc_now_iso)
-    updated_at: str = field(default_factory=utc_now_iso)
-
-    @classmethod
-    def from_row(cls, row: Any) -> "Entity":
-        return cls(
-            id=row["id"],
-            name=row["name"],
-            domain=row["domain"],
-            entity_type=row["entity_type"],
-            confidence=float(row["confidence"]),
-            source=row["source"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-        )
-
-
-@dataclass(frozen=True)
-class Relation:
-    subject: str
-    predicate: str
-    object: str
-    fact_id: str
-    domain: str
-    confidence: float = 0.75
-    source: str = "local"
-    id: str = field(default_factory=lambda: uuid4().hex)
-    created_at: str = field(default_factory=utc_now_iso)
-    updated_at: str = field(default_factory=utc_now_iso)
-
-    @classmethod
-    def from_row(cls, row: Any) -> "Relation":
-        return cls(
-            id=row["id"],
-            subject=row["subject"],
-            predicate=row["predicate"],
-            object=row["object"],
-            fact_id=row["fact_id"],
-            domain=row["domain"],
-            confidence=float(row["confidence"]),
-            source=row["source"],
-            created_at=row["created_at"],
-            updated_at=row["updated_at"],
-        )
-
-
-@dataclass(frozen=True)
 class SourceCandidate:
     url: str
     title: str
@@ -214,67 +160,6 @@ class SourceDocument:
             obsession=row["obsession"] if "obsession" in row.keys() else "",
             full_text=full_text or row["text_excerpt"],
             fetched_at=row["fetched_at"],
-        )
-
-
-@dataclass(frozen=True)
-class ResearchFinding:
-    topic: str
-    angle: str
-    summary: str
-    evidence_text: str
-    source: str
-    domain: str = "general"
-    novelty_score: float = 0.5
-    confidence: float = 0.6
-    tags: tuple[str, ...] = field(default_factory=tuple)
-    id: str = field(default_factory=lambda: uuid4().hex)
-    created_at: str = field(default_factory=utc_now_iso)
-
-    @classmethod
-    def from_row(cls, row: Any) -> "ResearchFinding":
-        tags = tuple(filter(None, (row["tags"] or "").split(",")))
-        return cls(
-            id=row["id"],
-            topic=row["topic"],
-            angle=row["angle"],
-            summary=row["summary"],
-            evidence_text=row["evidence_text"],
-            source=row["source"],
-            domain=row["domain"],
-            novelty_score=float(row["novelty_score"]),
-            confidence=float(row["confidence"]),
-            tags=tags,
-            created_at=row["created_at"],
-        )
-
-
-@dataclass(frozen=True)
-class ResearchReport:
-    topic: str
-    domain: str
-    summary: str
-    findings: tuple[str, ...] = field(default_factory=tuple)
-    sources: tuple[str, ...] = field(default_factory=tuple)
-    next_questions: tuple[str, ...] = field(default_factory=tuple)
-    status: str = "ok"
-    errors: tuple[str, ...] = field(default_factory=tuple)
-    id: str = field(default_factory=lambda: uuid4().hex)
-    created_at: str = field(default_factory=utc_now_iso)
-
-    @classmethod
-    def from_row(cls, row: Any) -> "ResearchReport":
-        return cls(
-            id=row["id"],
-            topic=row["topic"],
-            domain=row["domain"],
-            summary=row["summary"],
-            findings=tuple(json_loads(row["findings"])),
-            sources=tuple(json_loads(row["sources"])),
-            next_questions=tuple(json_loads(row["next_questions"])),
-            status=row["status"],
-            errors=tuple(json_loads(row["errors"])),
-            created_at=row["created_at"],
         )
 
 

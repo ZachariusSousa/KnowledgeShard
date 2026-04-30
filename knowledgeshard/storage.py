@@ -1,4 +1,4 @@
-"""SQLite-backed knowledge graph storage."""
+"""SQLite-backed local knowledge storage."""
 
 from __future__ import annotations
 
@@ -6,18 +6,13 @@ import json
 import sqlite3
 from pathlib import Path
 from typing import Iterable
-from uuid import uuid4
 
 from .models import (
     Correction,
-    Entity,
     Fact,
     PendingFact,
-    Relation,
     ResearchChunk,
-    ResearchFinding,
     ResearchNote,
-    ResearchReport,
     ResearchSynthesisRun,
     SourceCandidate,
     SourceDocument,
@@ -81,32 +76,6 @@ class KnowledgeStore:
                     created_at TEXT NOT NULL
                 );
 
-                CREATE TABLE IF NOT EXISTS entities (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    domain TEXT NOT NULL,
-                    entity_type TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    source TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE(name, domain)
-                );
-
-                CREATE TABLE IF NOT EXISTS relations (
-                    id TEXT PRIMARY KEY,
-                    subject TEXT NOT NULL,
-                    predicate TEXT NOT NULL,
-                    object TEXT NOT NULL,
-                    fact_id TEXT NOT NULL,
-                    domain TEXT NOT NULL,
-                    confidence REAL NOT NULL,
-                    source TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL,
-                    UNIQUE(fact_id)
-                );
-
                 CREATE TABLE IF NOT EXISTS pending_facts (
                     id TEXT PRIMARY KEY,
                     subject TEXT NOT NULL,
@@ -125,9 +94,6 @@ class KnowledgeStore:
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_facts_domain ON facts(domain);
-                CREATE INDEX IF NOT EXISTS idx_entities_domain ON entities(domain);
-                CREATE INDEX IF NOT EXISTS idx_relations_domain ON relations(domain);
-                CREATE INDEX IF NOT EXISTS idx_relations_predicate ON relations(predicate);
                 CREATE INDEX IF NOT EXISTS idx_pending_domain_status ON pending_facts(domain, review_status);
 
                 CREATE TABLE IF NOT EXISTS source_candidates (
@@ -163,66 +129,8 @@ class KnowledgeStore:
                     UNIQUE(content_hash, domain)
                 );
 
-                CREATE TABLE IF NOT EXISTS obsession_runs (
-                    id TEXT PRIMARY KEY,
-                    domain TEXT NOT NULL,
-                    obsession TEXT NOT NULL DEFAULT '',
-                    status TEXT NOT NULL,
-                    discovered_count INTEGER NOT NULL,
-                    fetched_count INTEGER NOT NULL,
-                    extracted_count INTEGER NOT NULL,
-                    pending_count INTEGER NOT NULL,
-                    errors TEXT NOT NULL,
-                    elapsed_seconds REAL NOT NULL,
-                    memory_peak_kb REAL NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
                 CREATE INDEX IF NOT EXISTS idx_sources_domain_status ON source_candidates(domain, status);
                 CREATE INDEX IF NOT EXISTS idx_documents_domain ON source_documents(domain);
-
-                CREATE TABLE IF NOT EXISTS discovery_queries (
-                    id TEXT PRIMARY KEY,
-                    domain TEXT NOT NULL,
-                    obsession TEXT NOT NULL,
-                    query TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    result_count INTEGER NOT NULL,
-                    errors TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_discovery_queries_domain ON discovery_queries(domain, created_at DESC);
-
-                CREATE TABLE IF NOT EXISTS research_findings (
-                    id TEXT PRIMARY KEY,
-                    topic TEXT NOT NULL,
-                    angle TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    evidence_text TEXT NOT NULL,
-                    source TEXT NOT NULL,
-                    domain TEXT NOT NULL,
-                    novelty_score REAL NOT NULL,
-                    confidence REAL NOT NULL,
-                    tags TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE TABLE IF NOT EXISTS research_reports (
-                    id TEXT PRIMARY KEY,
-                    topic TEXT NOT NULL,
-                    domain TEXT NOT NULL,
-                    summary TEXT NOT NULL,
-                    findings TEXT NOT NULL,
-                    sources TEXT NOT NULL,
-                    next_questions TEXT NOT NULL,
-                    status TEXT NOT NULL,
-                    errors TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                );
-
-                CREATE INDEX IF NOT EXISTS idx_research_findings_domain ON research_findings(domain, created_at DESC);
-                CREATE INDEX IF NOT EXISTS idx_research_reports_domain ON research_reports(domain, created_at DESC);
 
                 CREATE TABLE IF NOT EXISTS research_chunks (
                     id TEXT PRIMARY KEY,
@@ -283,7 +191,6 @@ class KnowledgeStore:
             self._ensure_column(db, "source_candidates", "discovery_reason", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "source_documents", "obsession", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "source_documents", "full_text", "TEXT NOT NULL DEFAULT ''")
-            self._ensure_column(db, "obsession_runs", "obsession", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "facts", "evidence_text", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "facts", "evidence_hash", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "facts", "extraction_method", "TEXT NOT NULL DEFAULT ''")
@@ -299,11 +206,6 @@ class KnowledgeStore:
     def upsert_fact(self, fact: Fact) -> None:
         with self.connect() as db:
             self._upsert_fact_row(db, fact)
-            self._upsert_graph_fact_row(db, fact)
-
-    def _upsert_graph_fact(self, fact: Fact) -> None:
-        with self.connect() as db:
-            self._upsert_graph_fact_row(db, fact)
 
     def _upsert_fact_row(self, db: sqlite3.Connection, fact: Fact) -> None:
         db.execute(
@@ -343,71 +245,11 @@ class KnowledgeStore:
             ),
         )
 
-    def _upsert_graph_fact_row(self, db: sqlite3.Connection, fact: Fact) -> None:
-        subject = fact.subject.strip()
-        obj = fact.object.strip()
-        if not subject or not obj:
-            return
-        now = utc_now_iso()
-        for name in (subject, obj):
-            db.execute(
-                """
-                INSERT INTO entities (
-                    id, name, domain, entity_type, confidence, source, created_at, updated_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(name, domain) DO UPDATE SET
-                    confidence = MAX(entities.confidence, excluded.confidence),
-                    source = excluded.source,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    f"{fact.domain}:{name}",
-                    name,
-                    fact.domain,
-                    "concept",
-                    fact.confidence,
-                    fact.source,
-                    fact.created_at,
-                    now,
-                ),
-            )
-        db.execute(
-            """
-            INSERT INTO relations (
-                id, subject, predicate, object, fact_id, domain,
-                confidence, source, created_at, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(fact_id) DO UPDATE SET
-                subject = excluded.subject,
-                predicate = excluded.predicate,
-                object = excluded.object,
-                domain = excluded.domain,
-                confidence = excluded.confidence,
-                source = excluded.source,
-                updated_at = excluded.updated_at
-            """,
-            (
-                f"relation:{fact.id}",
-                subject,
-                fact.relation,
-                obj,
-                fact.id,
-                fact.domain,
-                fact.confidence,
-                fact.source,
-                fact.created_at,
-                now,
-            ),
-        )
-
     def add_facts(self, facts: Iterable[Fact]) -> int:
         count = 0
         with self.connect() as db:
             for fact in facts:
                 self._upsert_fact_row(db, fact)
-                self._upsert_graph_fact_row(db, fact)
                 count += 1
         return count
 
@@ -440,8 +282,6 @@ class KnowledgeStore:
                     SELECT domain, MAX(created_at) AS last_seen FROM pending_facts GROUP BY domain
                     UNION ALL
                     SELECT domain, MAX(last_seen_at) AS last_seen FROM source_candidates GROUP BY domain
-                    UNION ALL
-                    SELECT domain, MAX(created_at) AS last_seen FROM obsession_runs GROUP BY domain
                 )
                 GROUP BY domain
                 ORDER BY last_seen DESC
@@ -574,38 +414,6 @@ class KnowledgeStore:
                 "UPDATE pending_facts SET review_status = ?, updated_at = ? WHERE id = ?",
                 (review_status, utc_now_iso(), pending_id),
             )
-
-    def list_entities(self, domain: str | None = None) -> list[Entity]:
-        with self.connect() as db:
-            if domain:
-                rows = db.execute("SELECT * FROM entities WHERE domain = ? ORDER BY name", (domain,)).fetchall()
-            else:
-                rows = db.execute("SELECT * FROM entities ORDER BY domain, name").fetchall()
-        return [Entity.from_row(row) for row in rows]
-
-    def list_relations(self, domain: str | None = None) -> list[Relation]:
-        with self.connect() as db:
-            if domain:
-                rows = db.execute("SELECT * FROM relations WHERE domain = ? ORDER BY updated_at DESC", (domain,)).fetchall()
-            else:
-                rows = db.execute("SELECT * FROM relations ORDER BY updated_at DESC").fetchall()
-        return [Relation.from_row(row) for row in rows]
-
-    def count_entities(self, domain: str | None = None) -> int:
-        with self.connect() as db:
-            if domain:
-                row = db.execute("SELECT COUNT(*) AS total FROM entities WHERE domain = ?", (domain,)).fetchone()
-            else:
-                row = db.execute("SELECT COUNT(*) AS total FROM entities").fetchone()
-        return int(row["total"])
-
-    def count_relations(self, domain: str | None = None) -> int:
-        with self.connect() as db:
-            if domain:
-                row = db.execute("SELECT COUNT(*) AS total FROM relations WHERE domain = ?", (domain,)).fetchone()
-            else:
-                row = db.execute("SELECT COUNT(*) AS total FROM relations").fetchone()
-        return int(row["total"])
 
     def upsert_source_candidate(self, source: SourceCandidate) -> bool:
         with self.connect() as db:
@@ -759,64 +567,6 @@ class KnowledgeStore:
             ).fetchall()
         return [Fact.from_row(row) for row in rows]
 
-    def list_obsession_runs(self, domain: str, limit: int = 10) -> list[dict]:
-        with self.connect() as db:
-            rows = db.execute(
-                """
-                SELECT * FROM obsession_runs
-                WHERE domain = ?
-                ORDER BY created_at DESC
-                LIMIT ?
-                """,
-                (domain, limit),
-            ).fetchall()
-        return [
-            {
-                "id": row["id"],
-                "domain": row["domain"],
-                "obsession": row["obsession"] if "obsession" in row.keys() else "",
-                "status": row["status"],
-                "discovered_count": int(row["discovered_count"]),
-                "fetched_count": int(row["fetched_count"]),
-                "extracted_count": int(row["extracted_count"]),
-                "pending_count": int(row["pending_count"]),
-                "errors": json.loads(row["errors"] or "[]"),
-                "elapsed_seconds": float(row["elapsed_seconds"]),
-                "memory_peak_kb": float(row["memory_peak_kb"]),
-                "created_at": row["created_at"],
-            }
-            for row in rows
-        ]
-
-    def log_discovery_query(
-        self,
-        domain: str,
-        obsession: str,
-        query: str,
-        status: str,
-        result_count: int,
-        errors: list[str],
-    ) -> None:
-        with self.connect() as db:
-            db.execute(
-                """
-                INSERT INTO discovery_queries (
-                    id, domain, obsession, query, status, result_count, errors, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"discovery:{domain}:{uuid4().hex}",
-                    domain,
-                    obsession,
-                    query,
-                    status,
-                    result_count,
-                    json.dumps(errors),
-                    utc_now_iso(),
-                ),
-            )
-
     def list_recent_query_questions(self, limit: int = 20) -> list[str]:
         with self.connect() as db:
             rows = db.execute(
@@ -824,46 +574,6 @@ class KnowledgeStore:
                 (limit,),
             ).fetchall()
         return [str(row["question"]) for row in rows]
-
-    def log_obsession_run(
-        self,
-        domain: str,
-        obsession: str,
-        status: str,
-        discovered_count: int,
-        fetched_count: int,
-        extracted_count: int,
-        pending_count: int,
-        errors: list[str],
-        elapsed_seconds: float,
-        memory_peak_kb: float,
-    ) -> None:
-        with self.connect() as db:
-            db.execute(
-                """
-                INSERT INTO obsession_runs (
-                    id, domain, status, discovered_count, fetched_count,
-                    obsession,
-                    extracted_count, pending_count, errors, elapsed_seconds,
-                    memory_peak_kb, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    f"obsession:{domain}:{uuid4().hex}",
-                    domain,
-                    status,
-                    discovered_count,
-                    fetched_count,
-                    obsession,
-                    extracted_count,
-                    pending_count,
-                    json.dumps(errors),
-                    elapsed_seconds,
-                    memory_peak_kb,
-                    utc_now_iso(),
-                ),
-            )
 
     def log_query(self, query_id: str, question: str, answer: str, confidence: float, citations: list[dict]) -> None:
         with self.connect() as db:
@@ -901,111 +611,6 @@ class KnowledgeStore:
         with self.connect() as db:
             row = db.execute("SELECT COUNT(*) AS total FROM corrections").fetchone()
         return int(row["total"])
-
-    def add_research_finding(self, finding: ResearchFinding) -> bool:
-        with self.connect() as db:
-            existing = db.execute(
-                """
-                SELECT id FROM research_findings
-                WHERE topic = ? AND angle = ? AND summary = ? AND source = ? AND domain = ?
-                """,
-                (finding.topic, finding.angle, finding.summary, finding.source, finding.domain),
-            ).fetchone()
-            if existing:
-                return False
-            db.execute(
-                """
-                INSERT INTO research_findings (
-                    id, topic, angle, summary, evidence_text, source, domain,
-                    novelty_score, confidence, tags, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    finding.id,
-                    finding.topic,
-                    finding.angle,
-                    finding.summary,
-                    finding.evidence_text,
-                    finding.source,
-                    finding.domain,
-                    finding.novelty_score,
-                    finding.confidence,
-                    ",".join(finding.tags),
-                    finding.created_at,
-                ),
-            )
-        return True
-
-    def list_research_findings(self, domain: str | None = None, limit: int = 20) -> list[ResearchFinding]:
-        with self.connect() as db:
-            if domain:
-                rows = db.execute(
-                    """
-                    SELECT * FROM research_findings
-                    WHERE domain = ?
-                    ORDER BY novelty_score DESC, created_at DESC
-                    LIMIT ?
-                    """,
-                    (domain, limit),
-                ).fetchall()
-            else:
-                rows = db.execute(
-                    """
-                    SELECT * FROM research_findings
-                    ORDER BY novelty_score DESC, created_at DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                ).fetchall()
-        return [ResearchFinding.from_row(row) for row in rows]
-
-    def add_research_report(self, report: ResearchReport) -> None:
-        with self.connect() as db:
-            db.execute(
-                """
-                INSERT INTO research_reports (
-                    id, topic, domain, summary, findings, sources,
-                    next_questions, status, errors, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    report.id,
-                    report.topic,
-                    report.domain,
-                    report.summary,
-                    json.dumps(list(report.findings)),
-                    json.dumps(list(report.sources)),
-                    json.dumps(list(report.next_questions)),
-                    report.status,
-                    json.dumps(list(report.errors)),
-                    report.created_at,
-                ),
-            )
-
-    def list_research_reports(self, domain: str | None = None, limit: int = 10) -> list[ResearchReport]:
-        with self.connect() as db:
-            if domain:
-                rows = db.execute(
-                    """
-                    SELECT * FROM research_reports
-                    WHERE domain = ?
-                    ORDER BY created_at DESC
-                    LIMIT ?
-                    """,
-                    (domain, limit),
-                ).fetchall()
-            else:
-                rows = db.execute(
-                    """
-                    SELECT * FROM research_reports
-                    ORDER BY created_at DESC
-                    LIMIT ?
-                    """,
-                    (limit,),
-                ).fetchall()
-        return [ResearchReport.from_row(row) for row in rows]
 
     def add_research_chunk(self, chunk: ResearchChunk) -> bool:
         with self.connect() as db:

@@ -1,4 +1,4 @@
-"""Curious autonomous research loop that stores notes before graph facts."""
+"""Crawl, chunk, and process local research documents."""
 
 from __future__ import annotations
 
@@ -7,19 +7,17 @@ import json
 from dataclasses import asdict
 from uuid import NAMESPACE_URL, uuid5
 
+from .extraction import evidence_hash, parse_confidence
 from .model_runtime import OptionalModelRuntime
-from .models import PendingFact, ResearchChunk, ResearchFinding, ResearchNote, ResearchReport, ResearchSynthesisRun, SourceCandidate
-from .obsession import (
+from .models import PendingFact, ResearchChunk, ResearchNote, ResearchSynthesisRun, SourceCandidate
+from .sources import (
     DocumentFetcher,
     DuckDuckGoSearchProvider,
-    ResearchProfile,
     SearchResult,
     SourceScorer,
     generate_agenda,
-    evidence_hash,
     load_research_profile,
     normalize_url,
-    parse_confidence,
 )
 from .retrieval import tokenize
 from .storage import KnowledgeStore
@@ -218,55 +216,6 @@ class ResearchAgent:
             "errors": errors,
         }
 
-    def run_once(self, budget: int = 8, findings_per_source: int = 3) -> dict:
-        errors: list[str] = []
-        angles = self.angles(budget)
-        sources = self.discover_sources(angles, budget, errors)
-        findings: list[ResearchFinding] = []
-        fetched = 0
-        link_sources: list[SourceCandidate] = []
-        for source in sources[:budget]:
-            try:
-                document = self.fetcher.fetch(source)
-            except OSError as exc:
-                errors.append(f"{source.url}: {exc}")
-                continue
-            fetched += 1
-            for finding in self.extract_findings(document.text_excerpt, source.url, source.title, angles, findings_per_source):
-                if self.store.add_research_finding(finding):
-                    findings.append(finding)
-            link_sources.extend(self.discover_link_sources(source, angles))
-
-        remaining_budget = max(budget - fetched, 0)
-        for source in dedupe_sources(link_sources)[:remaining_budget]:
-            try:
-                document = self.fetcher.fetch(source)
-            except OSError as exc:
-                errors.append(f"{source.url}: {exc}")
-                continue
-            fetched += 1
-            sources.append(source)
-            for finding in self.extract_findings(document.text_excerpt, source.url, source.title, angles, findings_per_source):
-                if self.store.add_research_finding(finding):
-                    findings.append(finding)
-
-        report = self.build_report(angles, findings, sources, errors)
-        self.store.add_research_report(report)
-        return {
-            "domain": self.domain,
-            "topic": self.topic,
-            "status": report.status,
-            "angles": angles,
-            "sources_discovered": len(sources),
-            "links_discovered": len(link_sources),
-            "fetched": fetched,
-            "findings_added": len(findings),
-            "report_id": report.id,
-            "top_findings": [asdict(finding) for finding in findings[:5]],
-            "next_questions": list(report.next_questions),
-            "errors": errors,
-        }
-
     def angles(self, limit: int = 8) -> list[str]:
         profile_angles = generate_agenda(self.domain, self.topic, self.profile, self.store, limit)
         defaults = [
@@ -307,75 +256,6 @@ class ResearchAgent:
                 candidates.append(candidate)
         candidates.sort(key=lambda item: (item.trust_score + item.relevance_score), reverse=True)
         return candidates[:5]
-
-    def extract_findings(
-        self,
-        text: str,
-        source: str,
-        title: str,
-        angles: list[str],
-        limit: int,
-    ) -> list[ResearchFinding]:
-        sentences = split_sentences(text)
-        scored: list[tuple[float, str, str]] = []
-        for sentence in sentences:
-            if len(sentence) < 45:
-                continue
-            angle = best_angle(sentence, angles)
-            if not supports_angle(sentence, angle):
-                continue
-            if is_research_noise(sentence):
-                continue
-            score = novelty_score(sentence, self.topic, title)
-            if score >= 0.25:
-                scored.append((score, angle, sentence))
-        scored.sort(reverse=True, key=lambda item: item[0])
-        findings: list[ResearchFinding] = []
-        for score, angle, sentence in scored[:limit]:
-            findings.append(
-                ResearchFinding(
-                    topic=self.topic,
-                    angle=angle,
-                    summary=summarize_sentence(sentence),
-                    evidence_text=sentence[:700],
-                    source=source,
-                    domain=self.domain,
-                    novelty_score=round(score, 3),
-                    confidence=0.65,
-                    tags=("research", *tuple(tokenize(angle)[:4])),
-                )
-            )
-        return findings
-
-    def build_report(
-        self,
-        angles: list[str],
-        findings: list[ResearchFinding],
-        sources: list[SourceCandidate],
-        errors: list[str],
-    ) -> ResearchReport:
-        top_summaries = [finding.summary for finding in findings[:5]]
-        summary = "No strong findings yet. Try a broader topic or add better seed sources."
-        if top_summaries:
-            summary = " ".join(top_summaries)
-        next_questions = tuple(f"What should I verify next about {angle}?" for angle in angles[:5])
-        return ResearchReport(
-            topic=self.topic,
-            domain=self.domain,
-            summary=summary[:1000],
-            findings=tuple(top_summaries),
-            sources=tuple(source.url for source in sources[:10]),
-            next_questions=next_questions,
-            status="ok" if findings and not errors else "partial",
-            errors=tuple(errors),
-        )
-
-    def reports(self, limit: int = 10) -> list[dict]:
-        return [asdict(report) for report in self.store.list_research_reports(self.domain, limit)]
-
-    def findings(self, limit: int = 20) -> list[dict]:
-        return [asdict(finding) for finding in self.store.list_research_findings(self.domain, limit)]
-
 
 def split_sentences(text: str) -> list[str]:
     normalized = " ".join(text.split())

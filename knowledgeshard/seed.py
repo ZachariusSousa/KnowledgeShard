@@ -10,7 +10,7 @@ from .models import Fact
 from .storage import KnowledgeStore
 
 
-def load_seed_facts(path: str | Path, store: KnowledgeStore, domain: str = "trains") -> int:
+def load_seed_facts(path: str | Path, store: KnowledgeStore, domain: str = "mario-kart-wii") -> int:
     payload = json.loads(Path(path).read_text(encoding="utf-8"))
     facts = [
         Fact(

@@ -5,14 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from dataclasses import asdict
-from datetime import datetime, timezone
 from pathlib import Path
 
-from .benchmark import run_benchmark
-from .graph import KnowledgeGraph
 from .model_runtime import train_lora
-from .obsession import ObsessionLoop
 from .research import ResearchAgent
 from .savant import Savant
 from .seed import load_seed_facts
@@ -25,7 +20,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--domain", default=None, help="Savant domain. Defaults to an inferred or existing domain.")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    seed = subparsers.add_parser("seed", help="Load seed facts into the knowledge graph.")
+    seed = subparsers.add_parser("seed", help="Load seed facts into local storage.")
     seed.add_argument("--file", default="data/seeds/mario_kart_wii.json", help="Seed JSON file.")
 
     ask = subparsers.add_parser("ask", help="Ask the local savant a question.")
@@ -48,67 +43,6 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("model-status", help="Show local model runtime status.")
     subparsers.add_parser("metrics", help="Show MVP metrics.")
 
-    graph = subparsers.add_parser("graph", help="Inspect the approved knowledge graph.")
-    graph_subparsers = graph.add_subparsers(dest="graph_command", required=True)
-    graph_subparsers.add_parser("stats", help="Show graph node and edge counts.")
-    neighbors = graph_subparsers.add_parser("neighbors", help="Show outgoing graph facts for an entity.")
-    neighbors.add_argument("entity")
-
-    obsess = subparsers.add_parser("obsess", help="Run the curated obsession review loop.")
-    obsess.add_argument("--config", default="config/mario_kart_wii.sources.json")
-    obsess.add_argument("--obsession", default=None, help="Natural-language research focus.")
-    obsess_subparsers = obsess.add_subparsers(dest="obsess_command", required=True)
-    discover = obsess_subparsers.add_parser("discover", help="Discover candidate sources from domain knowledge.")
-    discover.add_argument("--budget", type=int, default=None)
-    discover.add_argument("--query-limit", type=int, default=5)
-    discover.add_argument("--results-per-query", type=int, default=5)
-    sources = obsess_subparsers.add_parser("sources", help="List discovered source candidates.")
-    sources.add_argument("--limit", type=int, default=20)
-    documents = obsess_subparsers.add_parser("documents", help="List fetched source documents.")
-    documents.add_argument("--limit", type=int, default=20)
-    learned = obsess_subparsers.add_parser("learned", help="List auto-approved learned facts.")
-    learned.add_argument("--limit", type=int, default=20)
-    runs = obsess_subparsers.add_parser("runs", help="List obsession run logs.")
-    runs.add_argument("--limit", type=int, default=10)
-    fetch = obsess_subparsers.add_parser("fetch", help="Fetch discovered source documents.")
-    fetch.add_argument("--limit", type=int, default=5)
-    extract = obsess_subparsers.add_parser("extract", help="Extract pending facts from fetched documents.")
-    extract.add_argument("--limit", type=int, default=5)
-    extract.add_argument("--facts-per-document", type=int, default=5)
-    extract.add_argument("--auto-approve", action="store_true")
-    extract.add_argument("--auto-confidence-threshold", type=float, default=0.8)
-    extract.add_argument("--trusted-only", action=argparse.BooleanOptionalAction, default=None)
-    extract.add_argument("--min-auto-score", type=float, default=0.78)
-    fetch_rss = obsess_subparsers.add_parser("fetch-rss", help="Compatibility: fetch configured RSS sources into pending facts.")
-    fetch_rss.add_argument("--limit-per-source", type=int, default=10)
-    review = obsess_subparsers.add_parser("review", help="List pending facts.")
-    review.add_argument("--limit", type=int, default=20)
-    approve = obsess_subparsers.add_parser("approve", help="Approve one pending fact.")
-    approve.add_argument("pending_id")
-    reject = obsess_subparsers.add_parser("reject", help="Reject one pending fact.")
-    reject.add_argument("pending_id")
-    approve_source = obsess_subparsers.add_parser("approve-source", help="Approve and boost a discovered source.")
-    approve_source.add_argument("source_id")
-    reject_source = obsess_subparsers.add_parser("reject-source", help="Reject and deprioritize a discovered source.")
-    reject_source.add_argument("source_id")
-    run_once = obsess_subparsers.add_parser("run-once", help="Run one fetch cycle.")
-    run_once.add_argument("--budget", type=int, default=5)
-    run_once.add_argument("--auto-approve", action="store_true")
-    run_once.add_argument("--auto-confidence-threshold", type=float, default=0.8)
-    run_once.add_argument("--crawl-depth", type=int, default=None)
-    run_once.add_argument("--trusted-only", action=argparse.BooleanOptionalAction, default=None)
-    run_once.add_argument("--max-links-per-page", type=int, default=8)
-    run_once.add_argument("--min-auto-score", type=float, default=0.78)
-    run_daemon = obsess_subparsers.add_parser("run-daemon", help="Run the obsession loop until Ctrl+C.")
-    run_daemon.add_argument("--budget", type=int, default=5)
-    run_daemon.add_argument("--interval-minutes", type=float, default=30.0)
-    run_daemon.add_argument("--auto-approve", action="store_true")
-    run_daemon.add_argument("--auto-confidence-threshold", type=float, default=0.8)
-    run_daemon.add_argument("--crawl-depth", type=int, default=None)
-    run_daemon.add_argument("--trusted-only", action=argparse.BooleanOptionalAction, default=None)
-    run_daemon.add_argument("--max-links-per-page", type=int, default=8)
-    run_daemon.add_argument("--min-auto-score", type=float, default=0.78)
-
     research = subparsers.add_parser("research", help="Explore a topic and store interesting research notes.")
     research.add_argument("--config", default="config/mario_kart_wii.sources.json")
     research.add_argument("--topic", required=True, help="Natural-language subject to explore.")
@@ -126,22 +60,10 @@ def build_parser() -> argparse.ArgumentParser:
     research_synthesize = research_subparsers.add_parser("synthesize", help="Promote research notes into pending facts.")
     research_synthesize.add_argument("--limit", type=int, default=20)
     research_subparsers.add_parser("crawl-status", help="Show Crawl4AI ingestion backend status.")
-    research_run = research_subparsers.add_parser("run-once", help="Run one autonomous research pass.")
-    research_run.add_argument("--budget", type=int, default=8)
-    research_run.add_argument("--findings-per-source", type=int, default=3)
-    research_reports = research_subparsers.add_parser("reports", help="List research reports.")
-    research_reports.add_argument("--limit", type=int, default=5)
-    research_findings = research_subparsers.add_parser("findings", help="List research findings.")
-    research_findings.add_argument("--limit", type=int, default=20)
-
     train = subparsers.add_parser("train-lora", help="Train a PEFT LoRA adapter from approved facts.")
     train.add_argument("--output-dir", default="weights/lora")
     train.add_argument("--model-id", default=None)
 
-    benchmark = subparsers.add_parser("benchmark", help="Run the Mario Kart Wii gold-rubric benchmark.")
-    benchmark.add_argument("--file", default="benchmarks/mario_kart_wii_10.json")
-    benchmark.add_argument("--results-dir", default="benchmarks/results")
-    benchmark.add_argument("--top-k", type=int, default=5)
     return parser
 
 
@@ -179,108 +101,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "metrics":
         print(asdict_like(savant.metrics()))
         return 0
-    if args.command == "graph":
-        graph = KnowledgeGraph(store, domain)
-        if args.graph_command == "stats":
-            print(json.dumps(graph.stats(), indent=2))
-            return 0
-        if args.graph_command == "neighbors":
-            print(json.dumps(graph.neighbors(args.entity), indent=2))
-            return 0
-    if args.command == "obsess":
-        loop = ObsessionLoop(store, domain, obsession=args.obsession, config_path=args.config)
-        if args.obsess_command == "discover":
-            query_limit = args.budget if args.budget is not None else args.query_limit
-            print(json.dumps(loop.discover(query_limit, args.results_per_query), indent=2))
-            return 0
-        if args.obsess_command == "sources":
-            print(json.dumps(loop.sources(args.limit), indent=2))
-            return 0
-        if args.obsess_command == "documents":
-            print(json.dumps(loop.documents(args.limit), indent=2))
-            return 0
-        if args.obsess_command == "learned":
-            print(json.dumps(loop.learned(args.limit), indent=2))
-            return 0
-        if args.obsess_command == "runs":
-            print(json.dumps(loop.runs(args.limit), indent=2))
-            return 0
-        if args.obsess_command == "fetch":
-            print(json.dumps(loop.fetch_documents(args.limit), indent=2))
-            return 0
-        if args.obsess_command == "extract":
-            print(
-                json.dumps(
-                    loop.extract(
-                        args.limit,
-                        args.facts_per_document,
-                        auto_approve=args.auto_approve,
-                        auto_confidence_threshold=args.auto_confidence_threshold,
-                        trusted_only=args.trusted_only,
-                        min_auto_score=args.min_auto_score,
-                    ),
-                    indent=2,
-                )
-            )
-            return 0
-        if args.obsess_command == "fetch-rss":
-            print(json.dumps(loop.fetch(args.limit_per_source), indent=2))
-            return 0
-        if args.obsess_command == "review":
-            print(json.dumps(loop.review(args.limit), indent=2))
-            return 0
-        if args.obsess_command == "approve":
-            print(json.dumps(loop.approve(args.pending_id), indent=2))
-            return 0
-        if args.obsess_command == "reject":
-            print(json.dumps(loop.reject(args.pending_id), indent=2))
-            return 0
-        if args.obsess_command == "approve-source":
-            print(json.dumps(loop.approve_source(args.source_id), indent=2))
-            return 0
-        if args.obsess_command == "reject-source":
-            print(json.dumps(loop.reject_source(args.source_id), indent=2))
-            return 0
-        if args.obsess_command == "run-once":
-            print(
-                json.dumps(
-                    loop.run_once(
-                        args.budget,
-                        auto_approve=args.auto_approve,
-                        auto_confidence_threshold=args.auto_confidence_threshold,
-                        crawl_depth=args.crawl_depth,
-                        trusted_only=args.trusted_only,
-                        max_links_per_page=args.max_links_per_page,
-                        min_auto_score=args.min_auto_score,
-                    ),
-                    indent=2,
-                )
-            )
-            return 0
-        if args.obsess_command == "run-daemon":
-            print(
-                json.dumps(
-                    {
-                        "running": True,
-                        "domain": domain,
-                        "obsession": loop.obsession,
-                        "interval_minutes": args.interval_minutes,
-                        "auto_approve": args.auto_approve,
-                    },
-                    indent=2,
-                )
-            )
-            loop.run_daemon(
-                args.budget,
-                args.interval_minutes,
-                auto_approve=args.auto_approve,
-                auto_confidence_threshold=args.auto_confidence_threshold,
-                crawl_depth=args.crawl_depth,
-                trusted_only=args.trusted_only,
-                max_links_per_page=args.max_links_per_page,
-                min_auto_score=args.min_auto_score,
-            )
-            return 0
     if args.command == "research":
         agent = ResearchAgent(store, domain, args.topic, config_path=args.config)
         if args.research_command == "ingest":
@@ -301,27 +121,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.research_command == "synthesize":
             print(json.dumps(agent.synthesize(args.limit), indent=2))
             return 0
-        if args.research_command == "run-once":
-            print(json.dumps(agent.run_once(args.budget, args.findings_per_source), indent=2))
-            return 0
-        if args.research_command == "reports":
-            print(json.dumps(agent.reports(args.limit), indent=2))
-            return 0
-        if args.research_command == "findings":
-            print(json.dumps(agent.findings(args.limit), indent=2))
-            return 0
     if args.command == "train-lora":
         print(json.dumps(train_lora(domain, args.db, args.output_dir, args.model_id), indent=2))
-        return 0
-    if args.command == "benchmark":
-        result = run_benchmark(args.file, args.db, domain, args.top_k)
-        results_dir = Path(args.results_dir)
-        results_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        output_path = results_dir / f"results_{timestamp}.json"
-        output_path.write_text(json.dumps(result, indent=2), encoding="utf-8")
-        print(json.dumps(result, indent=2))
-        print(f"Results saved to: {output_path}")
         return 0
     return 1
 
@@ -355,9 +156,6 @@ FOCUS_WORDS = {
 def resolve_domain(args: argparse.Namespace, store: KnowledgeStore) -> str:
     if args.domain:
         return args.domain
-    obsession = getattr(args, "obsession", None)
-    if obsession:
-        return infer_domain(obsession, store.list_domains())
     topic = getattr(args, "topic", None)
     if topic:
         return infer_domain(topic, store.list_domains())

@@ -14,7 +14,7 @@ RUN if [ "$INSTALL_ML" = "true" ]; then python -m pip install --no-cache-dir -r 
 
 COPY . .
 
-VOLUME ["/app/data", "/app/weights", "/app/benchmarks/results"]
+VOLUME ["/app/data", "/app/weights"]
 
 EXPOSE 8080
 
