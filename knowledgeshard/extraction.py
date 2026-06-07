@@ -220,6 +220,8 @@ class FactExtractor:
             evidence_text=evidence_text,
             evidence_hash=evidence_hash(evidence_text),
             extraction_method="model",
+            source_document_id=document.id,
+            content_origin="model_extracted",
             tags=("extracted", *tuple(str(tag)[:40] for tag in tags)),
         )
 
@@ -294,6 +296,8 @@ class StructuredExtractor:
                         evidence_text=evidence_text[:600],
                         evidence_hash=evidence_hash(evidence_text),
                         extraction_method="table",
+                        source_document_id=document.id,
+                        content_origin="table_extracted",
                         tags=("extracted", "table-extracted", header[:40]),
                     )
                 )

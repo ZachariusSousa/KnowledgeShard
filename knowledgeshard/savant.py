@@ -33,6 +33,7 @@ class Savant:
         confidence: float = 0.8,
         source: str = "manual",
         tags: tuple[str, ...] = (),
+        content_origin: str = "manual",
     ) -> Fact:
         fact = Fact(
             subject=subject,
@@ -42,6 +43,7 @@ class Savant:
             source=source,
             domain=self.domain,
             tags=tags,
+            content_origin=content_origin,
         )
         self.store.upsert_fact(fact)
         return fact
@@ -137,6 +139,7 @@ class Savant:
             confidence=saved.confidence,
             source=f"correction:{query_id}",
             tags=("correction",),
+            content_origin="human_correction",
         )
         return saved
 

@@ -54,6 +54,12 @@ class KnowledgeStore:
                     evidence_text TEXT NOT NULL DEFAULT '',
                     evidence_hash TEXT NOT NULL DEFAULT '',
                     extraction_method TEXT NOT NULL DEFAULT '',
+                    source_document_id TEXT NOT NULL DEFAULT '',
+                    research_chunk_id TEXT NOT NULL DEFAULT '',
+                    research_note_id TEXT NOT NULL DEFAULT '',
+                    evidence_start INTEGER NOT NULL DEFAULT -1,
+                    evidence_end INTEGER NOT NULL DEFAULT -1,
+                    content_origin TEXT NOT NULL DEFAULT 'unknown',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
                 );
@@ -88,6 +94,12 @@ class KnowledgeStore:
                     evidence_text TEXT NOT NULL DEFAULT '',
                     evidence_hash TEXT NOT NULL DEFAULT '',
                     extraction_method TEXT NOT NULL DEFAULT '',
+                    source_document_id TEXT NOT NULL DEFAULT '',
+                    research_chunk_id TEXT NOT NULL DEFAULT '',
+                    research_note_id TEXT NOT NULL DEFAULT '',
+                    evidence_start INTEGER NOT NULL DEFAULT -1,
+                    evidence_end INTEGER NOT NULL DEFAULT -1,
+                    content_origin TEXT NOT NULL DEFAULT 'unknown',
                     review_status TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -125,12 +137,24 @@ class KnowledgeStore:
                     content_hash TEXT NOT NULL,
                     domain TEXT NOT NULL,
                     obsession TEXT NOT NULL DEFAULT '',
+                    author TEXT NOT NULL DEFAULT '',
+                    published_at TEXT NOT NULL DEFAULT '',
+                    retrieved_at TEXT NOT NULL DEFAULT '',
+                    metadata TEXT NOT NULL DEFAULT '{}',
+                    content_type TEXT NOT NULL DEFAULT 'text/markdown',
+                    content_origin TEXT NOT NULL DEFAULT 'fetched_source',
                     fetched_at TEXT NOT NULL,
                     UNIQUE(content_hash, domain)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_sources_domain_status ON source_candidates(domain, status);
                 CREATE INDEX IF NOT EXISTS idx_documents_domain ON source_documents(domain);
+                CREATE INDEX IF NOT EXISTS idx_documents_url ON source_documents(url);
+                CREATE INDEX IF NOT EXISTS idx_documents_hash ON source_documents(content_hash);
+                CREATE INDEX IF NOT EXISTS idx_facts_source_document ON facts(source_document_id);
+                CREATE INDEX IF NOT EXISTS idx_facts_research_chunk ON facts(research_chunk_id);
+                CREATE INDEX IF NOT EXISTS idx_pending_source_document ON pending_facts(source_document_id);
+                CREATE INDEX IF NOT EXISTS idx_pending_research_chunk ON pending_facts(research_chunk_id);
 
                 CREATE TABLE IF NOT EXISTS research_chunks (
                     id TEXT PRIMARY KEY,
@@ -194,9 +218,27 @@ class KnowledgeStore:
             self._ensure_column(db, "facts", "evidence_text", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "facts", "evidence_hash", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "facts", "extraction_method", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "facts", "source_document_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "facts", "research_chunk_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "facts", "research_note_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "facts", "evidence_start", "INTEGER NOT NULL DEFAULT -1")
+            self._ensure_column(db, "facts", "evidence_end", "INTEGER NOT NULL DEFAULT -1")
+            self._ensure_column(db, "facts", "content_origin", "TEXT NOT NULL DEFAULT 'unknown'")
             self._ensure_column(db, "pending_facts", "evidence_text", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "pending_facts", "evidence_hash", "TEXT NOT NULL DEFAULT ''")
             self._ensure_column(db, "pending_facts", "extraction_method", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "pending_facts", "source_document_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "pending_facts", "research_chunk_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "pending_facts", "research_note_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "pending_facts", "evidence_start", "INTEGER NOT NULL DEFAULT -1")
+            self._ensure_column(db, "pending_facts", "evidence_end", "INTEGER NOT NULL DEFAULT -1")
+            self._ensure_column(db, "pending_facts", "content_origin", "TEXT NOT NULL DEFAULT 'unknown'")
+            self._ensure_column(db, "source_documents", "author", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "source_documents", "published_at", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "source_documents", "retrieved_at", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(db, "source_documents", "metadata", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column(db, "source_documents", "content_type", "TEXT NOT NULL DEFAULT 'text/markdown'")
+            self._ensure_column(db, "source_documents", "content_origin", "TEXT NOT NULL DEFAULT 'fetched_source'")
 
     def _ensure_column(self, db: sqlite3.Connection, table: str, column: str, definition: str) -> None:
         columns = {row["name"] for row in db.execute(f"PRAGMA table_info({table})").fetchall()}
@@ -212,9 +254,11 @@ class KnowledgeStore:
             """
             INSERT INTO facts (
                 id, subject, relation, object, confidence, source, domain,
-                tags, evidence_text, evidence_hash, extraction_method, created_at, updated_at
+                tags, evidence_text, evidence_hash, extraction_method,
+                source_document_id, research_chunk_id, research_note_id,
+                evidence_start, evidence_end, content_origin, created_at, updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 subject = excluded.subject,
                 relation = excluded.relation,
@@ -226,6 +270,12 @@ class KnowledgeStore:
                 evidence_text = excluded.evidence_text,
                 evidence_hash = excluded.evidence_hash,
                 extraction_method = excluded.extraction_method,
+                source_document_id = excluded.source_document_id,
+                research_chunk_id = excluded.research_chunk_id,
+                research_note_id = excluded.research_note_id,
+                evidence_start = excluded.evidence_start,
+                evidence_end = excluded.evidence_end,
+                content_origin = excluded.content_origin,
                 updated_at = excluded.updated_at
             """,
             (
@@ -240,6 +290,12 @@ class KnowledgeStore:
                 fact.evidence_text,
                 fact.evidence_hash,
                 fact.extraction_method,
+                fact.source_document_id,
+                fact.research_chunk_id,
+                fact.research_note_id,
+                fact.evidence_start,
+                fact.evidence_end,
+                fact.content_origin,
                 fact.created_at,
                 utc_now_iso(),
             ),
@@ -306,9 +362,11 @@ class KnowledgeStore:
                 """
                 INSERT INTO pending_facts (
                     id, subject, relation, object, confidence, source, domain,
-                    tags, evidence_text, evidence_hash, extraction_method, review_status, created_at, updated_at
+                    tags, evidence_text, evidence_hash, extraction_method,
+                    source_document_id, research_chunk_id, research_note_id,
+                    evidence_start, evidence_end, content_origin, review_status, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     pending.id,
@@ -322,6 +380,12 @@ class KnowledgeStore:
                     pending.evidence_text,
                     pending.evidence_hash,
                     pending.extraction_method,
+                    pending.source_document_id,
+                    pending.research_chunk_id,
+                    pending.research_note_id,
+                    pending.evidence_start,
+                    pending.evidence_end,
+                    pending.content_origin,
                     pending.review_status,
                     pending.created_at,
                     pending.updated_at,
@@ -393,6 +457,12 @@ class KnowledgeStore:
             evidence_text=pending.evidence_text,
             evidence_hash=pending.evidence_hash,
             extraction_method=pending.extraction_method,
+            source_document_id=pending.source_document_id,
+            research_chunk_id=pending.research_chunk_id,
+            research_note_id=pending.research_note_id,
+            evidence_start=pending.evidence_start,
+            evidence_end=pending.evidence_end,
+            content_origin=pending.content_origin,
             created_at=pending.created_at,
         )
         self.upsert_fact(fact)
@@ -523,9 +593,11 @@ class KnowledgeStore:
             db.execute(
                 """
                 INSERT INTO source_documents (
-                    id, source_id, url, title, text_excerpt, full_text, content_hash, domain, obsession, fetched_at
+                    id, source_id, url, title, text_excerpt, full_text, content_hash,
+                    domain, obsession, author, published_at, retrieved_at, metadata,
+                    content_type, content_origin, fetched_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document.id,
@@ -537,6 +609,12 @@ class KnowledgeStore:
                     document.content_hash,
                     document.domain,
                     document.obsession,
+                    document.author,
+                    document.published_at,
+                    document.retrieved_at or document.fetched_at,
+                    document.metadata,
+                    document.content_type,
+                    document.content_origin,
                     document.fetched_at,
                 ),
             )

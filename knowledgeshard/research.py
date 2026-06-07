@@ -210,12 +210,14 @@ class ResearchAgent:
         errors: list[str] = []
         seen_claims: set[str] = set()
         for note in notes:
+            chunk = self.store.get_research_chunk(note.chunk_id)
             for claim in note.claims:
                 normalized = " ".join(claim.lower().split())
                 if not normalized or normalized in seen_claims:
                     continue
                 seen_claims.add(normalized)
                 evidence_text = first_supporting_quote(note.evidence_quotes, claim)
+                evidence_start, evidence_end = evidence_span(chunk.text if chunk else "", evidence_text)
                 pending = PendingFact(
                     id=uuid5(NAMESPACE_URL, f"{self.domain}:{self.topic}:{normalized}").hex,
                     subject=self.topic[:200],
@@ -228,6 +230,12 @@ class ResearchAgent:
                     evidence_text=evidence_text[:600],
                     evidence_hash=evidence_hash(evidence_text),
                     extraction_method="research-note",
+                    source_document_id=note.document_id,
+                    research_chunk_id=note.chunk_id,
+                    research_note_id=note.id,
+                    evidence_start=evidence_start,
+                    evidence_end=evidence_end,
+                    content_origin="model_extracted",
                 )
                 if self.store.add_pending_fact(pending):
                     promoted.append(pending.id)
@@ -662,6 +670,15 @@ def first_supporting_quote(quotes: tuple[str, ...], claim: str) -> str:
         if claim_terms & set(tokenize(quote)):
             return quote
     return quotes[0] if quotes else ""
+
+
+def evidence_span(source_text: str, evidence_text: str) -> tuple[int, int]:
+    if not source_text or not evidence_text:
+        return -1, -1
+    start = source_text.find(evidence_text)
+    if start == -1:
+        return -1, -1
+    return start, start + len(evidence_text)
 
 
 def best_angle(sentence: str, angles: list[str]) -> str:

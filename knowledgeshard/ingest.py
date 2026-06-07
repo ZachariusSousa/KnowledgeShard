@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 from dataclasses import dataclass
 from typing import Any
@@ -115,6 +116,7 @@ def source_document_from_crawl_result(
         raise OSError(str(error))
     final_url = result_url(result, source.url)
     title = result_title(result, source.title)
+    metadata = result_metadata(result)
     digest = content_hash(markdown)
     return SourceDocument(
         id=uuid5(NAMESPACE_URL, f"{source.domain}:{final_url}:{digest}").hex,
@@ -126,6 +128,9 @@ def source_document_from_crawl_result(
         content_hash=digest,
         domain=source.domain,
         obsession=source.obsession,
+        author=str(metadata.get("author") or metadata.get("byline") or "")[:200],
+        published_at=str(metadata.get("published_time") or metadata.get("date") or metadata.get("publishedAt") or "")[:100],
+        metadata=json.dumps(metadata, sort_keys=True),
     )
 
 

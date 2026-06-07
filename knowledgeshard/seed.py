@@ -22,6 +22,7 @@ def load_seed_facts(path: str | Path, store: KnowledgeStore, domain: str = "mari
             source=item.get("source", "seed"),
             domain=item.get("domain", domain),
             tags=tuple(item.get("tags", [])),
+            content_origin=item.get("content_origin", "seed"),
         )
         for item in payload["facts"]
     ]
@@ -55,6 +56,7 @@ def _expand_templates(templates: list[dict], default_domain: str) -> list[Fact]:
                         source=source,
                         domain=domain,
                         tags=tags + subject_tags + object_tags,
+                        content_origin="seed",
                     )
                 )
     return facts

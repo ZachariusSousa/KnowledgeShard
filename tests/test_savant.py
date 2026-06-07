@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from pathlib import Path
 import http.client
 import json
@@ -55,6 +57,9 @@ class KnowledgeShardTests(unittest.TestCase):
         db = sqlite3.connect(path)
         try:
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            fact_columns = {row[1] for row in db.execute("PRAGMA table_info(facts)")}
+            pending_columns = {row[1] for row in db.execute("PRAGMA table_info(pending_facts)")}
+            document_columns = {row[1] for row in db.execute("PRAGMA table_info(source_documents)")}
         finally:
             db.close()
 
@@ -71,6 +76,21 @@ class KnowledgeShardTests(unittest.TestCase):
                 "source_candidates",
                 "source_documents",
             },
+        )
+        for columns in (fact_columns, pending_columns):
+            self.assertTrue(
+                {
+                    "source_document_id",
+                    "research_chunk_id",
+                    "research_note_id",
+                    "evidence_start",
+                    "evidence_end",
+                    "content_origin",
+                }
+                <= columns
+            )
+        self.assertTrue(
+            {"author", "published_at", "retrieved_at", "metadata", "content_type", "content_origin"} <= document_columns
         )
 
     def test_crawl4ai_result_normalizes_markdown_document(self):
@@ -94,6 +114,8 @@ class KnowledgeShardTests(unittest.TestCase):
         self.assertEqual(document.url, "https://example.test/final")
         self.assertEqual(document.title, "Mario Kart Wii Manual Drift")
         self.assertIn("Manual drift enables mini-turbos.", document.full_text)
+        self.assertIn("sourceURL", document.metadata)
+        self.assertEqual(document.content_origin, "fetched_source")
         self.assertEqual(links[0].url, "https://example.test/wiki/Mini-Turbo")
 
     def test_source_profile_scoring_and_search_parsing(self):
@@ -261,6 +283,13 @@ class KnowledgeShardTests(unittest.TestCase):
         self.assertEqual(process["notes_added"], 1)
         self.assertEqual(synthesize["pending_added"], 1)
         self.assertEqual(store.count_pending_facts("robotics"), 1)
+        pending = store.list_pending_facts("robotics")[0]
+        note = store.list_research_notes("robotics", "servo movement")[0]
+        self.assertEqual(pending.source_document_id, note.document_id)
+        self.assertEqual(pending.research_chunk_id, note.chunk_id)
+        self.assertEqual(pending.research_note_id, note.id)
+        self.assertEqual(pending.content_origin, "model_extracted")
+        self.assertGreaterEqual(pending.evidence_start, 0)
 
     def test_research_process_repairs_missing_comma_json_without_model_retry(self):
         class RepairRuntime(OptionalModelRuntime):
@@ -416,6 +445,12 @@ class KnowledgeShardTests(unittest.TestCase):
             evidence_text="Servo movement enables precise robotics control.",
             evidence_hash=evidence_hash("Servo movement enables precise robotics control."),
             extraction_method="research-note",
+            source_document_id="doc-high",
+            research_chunk_id="chunk-high",
+            research_note_id="note-high",
+            evidence_start=0,
+            evidence_end=48,
+            content_origin="model_extracted",
         )
         low = PendingFact(
             id="low",
@@ -452,6 +487,10 @@ class KnowledgeShardTests(unittest.TestCase):
         self.assertEqual(result["approved"], 1)
         self.assertEqual(facts[0].id, "high")
         self.assertIn("auto-approved", facts[0].tags)
+        self.assertEqual(facts[0].source_document_id, "doc-high")
+        self.assertEqual(facts[0].research_chunk_id, "chunk-high")
+        self.assertEqual(facts[0].research_note_id, "note-high")
+        self.assertEqual(facts[0].content_origin, "model_extracted")
         self.assertEqual({fact.id for fact in pending}, {"low", "missing-evidence"})
 
     def test_research_job_manager_runs_background_cycle(self):

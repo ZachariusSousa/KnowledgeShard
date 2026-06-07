@@ -24,6 +24,12 @@ class Fact:
     evidence_text: str = ""
     evidence_hash: str = ""
     extraction_method: str = ""
+    source_document_id: str = ""
+    research_chunk_id: str = ""
+    research_note_id: str = ""
+    evidence_start: int = -1
+    evidence_end: int = -1
+    content_origin: str = "unknown"
     id: str = field(default_factory=lambda: uuid4().hex)
     created_at: str = field(default_factory=utc_now_iso)
     updated_at: str = field(default_factory=utc_now_iso)
@@ -47,6 +53,12 @@ class Fact:
             evidence_text=row["evidence_text"] if "evidence_text" in row.keys() else "",
             evidence_hash=row["evidence_hash"] if "evidence_hash" in row.keys() else "",
             extraction_method=row["extraction_method"] if "extraction_method" in row.keys() else "",
+            source_document_id=row["source_document_id"] if "source_document_id" in row.keys() else "",
+            research_chunk_id=row["research_chunk_id"] if "research_chunk_id" in row.keys() else "",
+            research_note_id=row["research_note_id"] if "research_note_id" in row.keys() else "",
+            evidence_start=int(row["evidence_start"]) if "evidence_start" in row.keys() else -1,
+            evidence_end=int(row["evidence_end"]) if "evidence_end" in row.keys() else -1,
+            content_origin=row["content_origin"] if "content_origin" in row.keys() else "unknown",
             created_at=row["created_at"],
             updated_at=row["updated_at"],
         )
@@ -64,6 +76,12 @@ class PendingFact:
     evidence_text: str = ""
     evidence_hash: str = ""
     extraction_method: str = ""
+    source_document_id: str = ""
+    research_chunk_id: str = ""
+    research_note_id: str = ""
+    evidence_start: int = -1
+    evidence_end: int = -1
+    content_origin: str = "unknown"
     review_status: str = "pending"
     id: str = field(default_factory=lambda: uuid4().hex)
     created_at: str = field(default_factory=utc_now_iso)
@@ -88,6 +106,12 @@ class PendingFact:
             evidence_text=row["evidence_text"] if "evidence_text" in row.keys() else "",
             evidence_hash=row["evidence_hash"] if "evidence_hash" in row.keys() else "",
             extraction_method=row["extraction_method"] if "extraction_method" in row.keys() else "",
+            source_document_id=row["source_document_id"] if "source_document_id" in row.keys() else "",
+            research_chunk_id=row["research_chunk_id"] if "research_chunk_id" in row.keys() else "",
+            research_note_id=row["research_note_id"] if "research_note_id" in row.keys() else "",
+            evidence_start=int(row["evidence_start"]) if "evidence_start" in row.keys() else -1,
+            evidence_end=int(row["evidence_end"]) if "evidence_end" in row.keys() else -1,
+            content_origin=row["content_origin"] if "content_origin" in row.keys() else "unknown",
             review_status=row["review_status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -143,6 +167,12 @@ class SourceDocument:
     domain: str
     obsession: str = ""
     full_text: str = ""
+    author: str = ""
+    published_at: str = ""
+    retrieved_at: str = ""
+    metadata: str = "{}"
+    content_type: str = "text/markdown"
+    content_origin: str = "fetched_source"
     id: str = field(default_factory=lambda: uuid4().hex)
     fetched_at: str = field(default_factory=utc_now_iso)
 
@@ -159,6 +189,12 @@ class SourceDocument:
             domain=row["domain"],
             obsession=row["obsession"] if "obsession" in row.keys() else "",
             full_text=full_text or row["text_excerpt"],
+            author=row["author"] if "author" in row.keys() else "",
+            published_at=row["published_at"] if "published_at" in row.keys() else "",
+            retrieved_at=row["retrieved_at"] if "retrieved_at" in row.keys() else row["fetched_at"],
+            metadata=row["metadata"] if "metadata" in row.keys() else "{}",
+            content_type=row["content_type"] if "content_type" in row.keys() else "text/markdown",
+            content_origin=row["content_origin"] if "content_origin" in row.keys() else "fetched_source",
             fetched_at=row["fetched_at"],
         )
 
